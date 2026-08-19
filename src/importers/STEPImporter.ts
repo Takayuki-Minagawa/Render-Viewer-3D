@@ -19,10 +19,14 @@ export interface STEPWorkerClient {
     options?: TessellateOptions,
   ): Promise<OcctMesh>;
   release(shape: ShapeHandle): Promise<void>;
+}
+
+export interface STEPWorkerHandle {
+  readonly ready: Promise<STEPWorkerClient>;
   terminate(): void;
 }
 
-export type STEPWorkerFactory = () => Promise<STEPWorkerClient>;
+export type STEPWorkerFactory = () => STEPWorkerHandle;
 
 const QUALITY_OPTIONS: Readonly<
   Record<TriangulationQuality, Readonly<TessellateOptions>>
@@ -45,6 +49,7 @@ const QUALITY_OPTIONS: Readonly<
 });
 const MAX_STEP_VERTEX_COUNT = 2_000_000;
 const MAX_STEP_TRIANGLE_COUNT = 2_000_000;
+export const MAX_STEP_INPUT_BYTES = 128 * 1024 * 1024;
 
 export function stepTessellationOptions(
   quality: TriangulationQuality,
@@ -52,12 +57,37 @@ export function stepTessellationOptions(
   return QUALITY_OPTIONS[quality];
 }
 
-async function spawnSTEPWorker(): Promise<STEPWorkerClient> {
-  const [{ OcctWorker }, wasmModule] = await Promise.all([
+function spawnSTEPWorker(): STEPWorkerHandle {
+  const nativeWorker = new Worker(
+    new URL("./step-worker-entry.ts", import.meta.url),
+    { type: "module" },
+  );
+  let terminated = false;
+  const terminate = (): void => {
+    if (terminated) return;
+    terminated = true;
+    nativeWorker.terminate();
+  };
+  const ready = Promise.all([
     import("occt-wasm/worker"),
     import("occt-wasm/dist/occt-wasm.wasm?url"),
-  ]);
-  return OcctWorker.spawn({ wasm: wasmModule.default });
+  ]).then(async ([{ OcctWorker }, wasmModule]) => {
+    if (terminated) {
+      throw new DOMException("The STEP worker was terminated.", "AbortError");
+    }
+    const client = await OcctWorker.spawn({
+      wasm: wasmModule.default,
+      worker: nativeWorker,
+    });
+    return {
+      importStep: (data: string | ArrayBuffer) => client.importStep(data),
+      tessellate: (shape: ShapeHandle, options?: TessellateOptions) =>
+        client.tessellate(shape, options),
+      release: (shape: ShapeHandle) => client.release(shape),
+    } satisfies STEPWorkerClient;
+  });
+
+  return { ready, terminate };
 }
 
 function geometryFromOcctMesh(mesh: OcctMesh): THREE.BufferGeometry {
@@ -113,38 +143,37 @@ export class STEPImporter extends BaseImporter {
     options: ImportOptions,
   ): Promise<ImportedModel> {
     this.assertNotAborted(options);
+    if (primary.size > MAX_STEP_INPUT_BYTES) {
+      const limitMiB = MAX_STEP_INPUT_BYTES / (1024 * 1024);
+      throw new Error(
+        `STEP / STP import exceeds the ${limitMiB} MiB worker input safety limit. Split or optimize the model before importing it.`,
+      );
+    }
     const data = await primary.arrayBuffer();
     this.assertNotAborted(options);
 
+    const workerHandle = this.workerFactory();
     let worker: STEPWorkerClient | undefined;
-    let terminatedWorker: STEPWorkerClient | undefined;
+    let workerTerminated = false;
     let shape: ShapeHandle | undefined;
-    const terminateWorker = (
-      candidate: STEPWorkerClient | undefined = worker,
-    ): void => {
-      if (!candidate || terminatedWorker === candidate) return;
-      terminatedWorker = candidate;
-      candidate.terminate();
+    const terminateWorker = (): void => {
+      if (workerTerminated) return;
+      workerTerminated = true;
+      workerHandle.terminate();
     };
-    const spawnPromise = this.workerFactory();
 
     try {
       worker = await abortable(
-        spawnPromise,
+        workerHandle.ready,
         options.signal,
-        () => {
-          void spawnPromise.then(
-            (spawned) => terminateWorker(spawned),
-            () => undefined,
-          );
-        },
+        terminateWorker,
       );
       const activeWorker = worker;
       this.assertNotAborted(options);
       shape = await abortable(
         activeWorker.importStep(data),
         options.signal,
-        () => terminateWorker(activeWorker),
+        terminateWorker,
       );
       this.assertNotAborted(options);
 
@@ -154,7 +183,7 @@ export class STEPImporter extends BaseImporter {
           stepTessellationOptions(options.quality),
         ),
         options.signal,
-        () => terminateWorker(activeWorker),
+        terminateWorker,
       );
       this.assertNotAborted(options);
 
@@ -188,16 +217,18 @@ export class STEPImporter extends BaseImporter {
     } finally {
       if (worker) {
         try {
-          if (shape !== undefined && terminatedWorker !== worker) {
+          if (shape !== undefined && !workerTerminated) {
             await abortable(
               worker.release(shape),
               options.signal,
-              () => terminateWorker(worker),
+              terminateWorker,
             );
           }
         } finally {
-          terminateWorker(worker);
+          terminateWorker();
         }
+      } else {
+        terminateWorker();
       }
     }
   }

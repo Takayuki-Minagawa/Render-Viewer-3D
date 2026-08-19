@@ -253,13 +253,6 @@ export function createApplication(root: HTMLElement): Application {
       },
       deleteMaterial: (materialId) => {
         store.update((draft) => {
-          if (
-            draft.imports.some(
-              (model) => model.materialMode === "custom" && model.customMaterialId === materialId,
-            )
-          ) {
-            return;
-          }
           deleteMaterial(draft, materialId);
         });
       },

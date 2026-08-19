@@ -109,13 +109,89 @@ describe("ImportedAssetStore", () => {
     store.register("asset-01", firstRoot);
     assert.throws(
       () => store.register("asset-02", secondRoot),
-      /must not share geometry, material, texture, or image resources/,
+      /must not share .* resources/,
     );
     assert.equal(store.size, 1);
 
     store.dispose();
     assert.equal(textureDisposal.count, 1);
     assert.equal(image.count, 1);
+  });
+
+  it("disposes shared skeletons and instanced-mesh GPU resources once", () => {
+    const store = new ImportedAssetStore();
+    const root = new THREE.Group();
+    const skeleton = new THREE.Skeleton([new THREE.Bone()]);
+    const boneTexture = new THREE.DataTexture();
+    skeleton.boneTexture = boneTexture;
+    const boneTextureDisposal = trackDisposal(boneTexture);
+    const originalSkeletonDispose = skeleton.dispose.bind(skeleton);
+    const skeletonDisposal = { count: 0 };
+    skeleton.dispose = () => {
+      skeletonDisposal.count += 1;
+      originalSkeletonDispose();
+    };
+
+    const firstSkinned = new THREE.SkinnedMesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+    );
+    const secondSkinned = new THREE.SkinnedMesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+    );
+    firstSkinned.bind(skeleton);
+    secondSkinned.bind(skeleton);
+    const instanced = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+      2,
+    );
+    const morphTexture = new THREE.DataTexture();
+    instanced.morphTexture = morphTexture;
+    const morphTextureDisposal = trackDisposal(morphTexture);
+    const instancedDisposal = { count: 0 };
+    instanced.addEventListener("dispose", () => {
+      instancedDisposal.count += 1;
+    });
+    root.add(firstSkinned, secondSkinned, instanced);
+
+    store.register("asset-01", root);
+    assert.equal(store.delete("asset-01"), true);
+    assert.equal(skeletonDisposal.count, 1);
+    assert.equal(boneTextureDisposal.count, 1);
+    assert.equal(skeleton.boneTexture, null);
+    assert.equal(instancedDisposal.count, 1);
+    assert.equal(morphTextureDisposal.count, 1);
+    assert.equal(instanced.morphTexture, null);
+
+    store.dispose();
+    assert.equal(skeletonDisposal.count, 1);
+    assert.equal(instancedDisposal.count, 1);
+  });
+
+  it("rejects a skeleton shared across independently owned assets", () => {
+    const store = new ImportedAssetStore();
+    const skeleton = new THREE.Skeleton([new THREE.Bone()]);
+    const firstMesh = new THREE.SkinnedMesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+    );
+    const secondMesh = new THREE.SkinnedMesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+    );
+    firstMesh.bind(skeleton);
+    secondMesh.bind(skeleton);
+    const firstRoot = new THREE.Group().add(firstMesh);
+    const secondRoot = new THREE.Group().add(secondMesh);
+
+    store.register("asset-01", firstRoot);
+    assert.throws(
+      () => store.register("asset-02", secondRoot),
+      /must not share .* resources/,
+    );
+    store.dispose();
   });
 });
 

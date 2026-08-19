@@ -128,7 +128,7 @@ POV-Ray概念プロファイルは自動更新されません。
 - 読み込み階層は表示用です。子node単位の選択・Transform・表示切替・マテリアル変更には未対応です。
 - glTF animationはruntimeへ読み込みますが、再生UIはありません。
 - 読み込んだThree.js assetはブラウザメモリだけに保持します。SceneModelのimport recordだけではモデルを復元できず、ページ再読み込み後は再importが必要です。
-- main threadで解析するGLB / glTF（sidecarを含む）、OBJ、STLは、UI停止を避けるため選択ファイル合計32 MiBまでです。STEPはWorkerで解析し、出力を200万頂点・200万triangleまでに制限します。
+- main threadで解析するGLB / glTF（sidecarを含む）、OBJ、STLは、UI停止を避けるため選択ファイル合計32 MiBまでです。STEPはWorkerで解析し、入力128 MiB、出力200万頂点・200万triangleまでに制限します。
 - 大規模モデル向けのLOD、mesh簡略化、永続cache、streaming importは未実装です。
 
 ## 表示と言語の設定

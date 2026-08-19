@@ -17,6 +17,8 @@ export class ImportedAssetRuntime {
   >();
   readonly #ownedGeometries = new Set<THREE.BufferGeometry>();
   readonly #ownedMaterials = new Set<THREE.Material>();
+  readonly #ownedSkeletons = new Set<THREE.Skeleton>();
+  readonly #ownedInstancedMeshes = new Set<THREE.InstancedMesh>();
   #disposed = false;
 
   constructor(assetId: string, sourceRoot: THREE.Object3D) {
@@ -46,6 +48,9 @@ export class ImportedAssetRuntime {
     this.root.removeFromParent();
     this.root.remove(this.sourceRoot);
 
+    for (const instancedMesh of this.#ownedInstancedMeshes) instancedMesh.dispose();
+    for (const skeleton of this.#ownedSkeletons) skeleton.dispose();
+
     const textures = new Set<THREE.Texture>();
     for (const material of this.#ownedMaterials) {
       collectMaterialTextures(material, textures);
@@ -62,6 +67,8 @@ export class ImportedAssetRuntime {
     this.#originalMeshMaterials.clear();
     this.#ownedMaterials.clear();
     this.#ownedGeometries.clear();
+    this.#ownedSkeletons.clear();
+    this.#ownedInstancedMeshes.clear();
   }
 
   #captureOwnedResources(): void {
@@ -70,6 +77,15 @@ export class ImportedAssetRuntime {
         geometry?: unknown;
         material?: unknown;
       };
+      if (
+        object instanceof THREE.SkinnedMesh &&
+        object.skeleton instanceof THREE.Skeleton
+      ) {
+        this.#ownedSkeletons.add(object.skeleton);
+      }
+      if (object instanceof THREE.InstancedMesh) {
+        this.#ownedInstancedMeshes.add(object);
+      }
       if (renderable.geometry instanceof THREE.BufferGeometry) {
         this.#ownedGeometries.add(renderable.geometry);
       }
@@ -115,7 +131,7 @@ export class ImportedAssetStore {
     for (const resource of resources) {
       if (this.#ownedResources.has(resource)) {
         throw new Error(
-          "Imported assets must not share geometry, material, texture, or image resources.",
+          "Imported assets must not share geometry, material, texture, image, skeleton, or instancing resources.",
         );
       }
     }
@@ -166,6 +182,21 @@ function collectOwnedResourceIdentities(
       geometry?: unknown;
       material?: unknown;
     };
+    if (
+      object instanceof THREE.SkinnedMesh &&
+      object.skeleton instanceof THREE.Skeleton
+    ) {
+      resources.add(object.skeleton);
+      if (object.skeleton.boneTexture) {
+        textures.add(object.skeleton.boneTexture);
+      }
+    }
+    if (object instanceof THREE.InstancedMesh) {
+      resources.add(object);
+      resources.add(object.instanceMatrix);
+      if (object.instanceColor) resources.add(object.instanceColor);
+      if (object.morphTexture) textures.add(object.morphTexture);
+    }
     if (renderable.geometry instanceof THREE.BufferGeometry) {
       resources.add(renderable.geometry);
     }

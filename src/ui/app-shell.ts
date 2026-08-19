@@ -318,7 +318,7 @@ export class AppShell {
         materialId,
       })),
       ...this.#model.imports.flatMap((imported) =>
-        imported.materialMode === "custom" && imported.customMaterialId
+        imported.customMaterialId
           ? [
               {
                 id: imported.id,

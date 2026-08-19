@@ -109,6 +109,28 @@ describe("material management commands", () => {
     assert.equal(material.assignMaterial(scene, objectId, "missing"), false);
   });
 
+  it("protects remembered imported material overrides while Imported mode is active", () => {
+    const scene = createDefaultSceneModel();
+    const remembered = material.addMaterial(scene, {
+      id: "remembered-import-override",
+      name: "Remembered import override",
+    });
+    scene.imports.push({
+      materialMode: "imported",
+      customMaterialId: remembered.id,
+    });
+
+    assert.equal(material.getMaterialUsageCount(scene, remembered.id), 1);
+    assert.equal(
+      material.getMaterialUsageCounts(scene).get(remembered.id),
+      1,
+    );
+    assert.equal(material.deleteMaterial(scene, remembered.id), "in-use");
+
+    scene.imports[0].customMaterialId = null;
+    assert.equal(material.deleteMaterial(scene, remembered.id), "deleted");
+  });
+
   it("uses the stable English preset label as a unique default name", () => {
     const scene = createDefaultSceneModel();
 

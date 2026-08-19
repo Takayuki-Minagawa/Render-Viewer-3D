@@ -6,6 +6,7 @@ import { createServer } from "vite";
 let server;
 let STEPImporter;
 let stepTessellationOptions;
+let MAX_STEP_INPUT_BYTES;
 let DEFAULT_IMPORT_OPTIONS;
 
 before(async () => {
@@ -14,9 +15,11 @@ before(async () => {
     logLevel: "silent",
     server: { middlewareMode: true },
   });
-  ({ STEPImporter, stepTessellationOptions } = await server.ssrLoadModule(
-    "/src/importers/STEPImporter.ts",
-  ));
+  ({
+    STEPImporter,
+    stepTessellationOptions,
+    MAX_STEP_INPUT_BYTES,
+  } = await server.ssrLoadModule("/src/importers/STEPImporter.ts"));
   ({ DEFAULT_IMPORT_OPTIONS } = await server.ssrLoadModule(
     "/src/importers/types.ts",
   ));
@@ -47,6 +50,16 @@ function deferred() {
     resolve = complete;
   });
   return { promise, resolve };
+}
+
+function createWorkerFactory(worker, onSpawn) {
+  return () => {
+    onSpawn?.();
+    return {
+      ready: Promise.resolve(worker),
+      terminate: () => worker.terminate(),
+    };
+  };
 }
 
 function fixtureMesh() {
@@ -97,6 +110,60 @@ describe("STEPImporter", () => {
     });
   });
 
+  it("rejects oversized input before reading it or creating a worker", async () => {
+    let arrayBufferCalls = 0;
+    let workerFactoryCalls = 0;
+    const primary = {
+      name: "oversized.step",
+      size: MAX_STEP_INPUT_BYTES + 1,
+      async arrayBuffer() {
+        arrayBufferCalls += 1;
+        return new ArrayBuffer(0);
+      },
+    };
+    const importer = new STEPImporter(() => {
+      workerFactoryCalls += 1;
+      throw new Error("worker factory must not be called");
+    });
+
+    await assert.rejects(
+      importer.import(primary, [primary], options()),
+      /128 MiB worker input safety limit/u,
+    );
+    assert.equal(arrayBufferCalls, 0);
+    assert.equal(workerFactoryCalls, 0);
+  });
+
+  it("terminates the worker handle immediately while spawn is pending", { timeout: 1_000 }, async () => {
+    const calls = [];
+    const started = deferred();
+    const pending = deferred();
+    const controller = new AbortController();
+    const importer = new STEPImporter(() => {
+      calls.push("spawn");
+      started.resolve();
+      return {
+        ready: pending.promise,
+        terminate() {
+          calls.push("terminate");
+        },
+      };
+    });
+    const primary = primaryFile();
+    const importing = importer.import(
+      primary,
+      [primary],
+      options({ signal: controller.signal }),
+    );
+
+    await started.promise;
+    const reason = new Error("stop spawn");
+    controller.abort(reason);
+
+    await assert.rejects(importing, (error) => error === reason);
+    assert.deepEqual(calls, ["spawn", "terminate"]);
+  });
+
   it("converts copied worker arrays and always releases the shape", async () => {
     const calls = [];
     const shape = 42;
@@ -121,10 +188,9 @@ describe("STEPImporter", () => {
         calls.push("terminate");
       },
     };
-    const importer = new STEPImporter(async () => {
-      calls.push("spawn");
-      return worker;
-    });
+    const importer = new STEPImporter(
+      createWorkerFactory(worker, () => calls.push("spawn")),
+    );
     const primary = primaryFile();
 
     const imported = await importer.import(
@@ -177,7 +243,7 @@ describe("STEPImporter", () => {
         calls.push("terminate");
       },
     };
-    const importer = new STEPImporter(async () => worker);
+    const importer = new STEPImporter(createWorkerFactory(worker));
     const primary = primaryFile();
 
     await assert.rejects(
@@ -211,7 +277,7 @@ describe("STEPImporter", () => {
         calls.push("terminate");
       },
     };
-    const importer = new STEPImporter(async () => worker);
+    const importer = new STEPImporter(createWorkerFactory(worker));
     const primary = primaryFile();
 
     await assert.rejects(
@@ -240,7 +306,7 @@ describe("STEPImporter", () => {
         calls.push("terminate");
       },
     };
-    const importer = new STEPImporter(async () => worker);
+    const importer = new STEPImporter(createWorkerFactory(worker));
     const primary = primaryFile();
 
     await assert.rejects(
@@ -272,7 +338,7 @@ describe("STEPImporter", () => {
       },
     };
     const controller = new AbortController();
-    const importer = new STEPImporter(async () => worker);
+    const importer = new STEPImporter(createWorkerFactory(worker));
     const primary = primaryFile();
     const importing = importer.import(
       primary,
@@ -310,7 +376,7 @@ describe("STEPImporter", () => {
       },
     };
     const controller = new AbortController();
-    const importer = new STEPImporter(async () => worker);
+    const importer = new STEPImporter(createWorkerFactory(worker));
     const primary = primaryFile();
     const importing = importer.import(
       primary,

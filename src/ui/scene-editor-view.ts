@@ -679,7 +679,11 @@ export class SceneEditorView {
       option.textContent = material.name;
       select.append(option);
     }
-    const selectedMaterialId = imported.customMaterialId ?? materials[0]?.id;
+    const selectedMaterialId = materials.some(
+      ({ id }) => id === imported.customMaterialId,
+    )
+      ? imported.customMaterialId
+      : materials[0]?.id;
     if (selectedMaterialId) select.value = selectedMaterialId;
     materialLabel.append(materialText, select);
     const help = document.createElement("p");

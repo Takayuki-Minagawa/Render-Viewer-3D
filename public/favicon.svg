@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Render Viewer 3D">
+  <rect width="64" height="64" rx="14" fill="#0b0e13"/>
+  <path d="M32 10 51 21 32 32 13 21 32 10Z" fill="#8eacff"/>
+  <path d="m13 21 19 11v22L13 43V21Z" fill="#526fca"/>
+  <path d="m51 21-19 11v22l19-11V21Z" fill="#6b91ff"/>
+  <path d="M32 10v22m0 0L13 21m19 11 19-11" fill="none" stroke="#d9e3ff" stroke-width="2" stroke-linejoin="round" opacity=".8"/>
+  <circle cx="50" cy="14" r="4" fill="#4fe0a2"/>
+</svg>

@@ -1,12 +1,15 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import type { TransformMode } from "../app/editor-store";
 import type {
   CameraModel,
   DeepReadonly,
   SceneSnapshot,
+  TransformModel,
   Vec3Model,
 } from "../model/scene-model";
 import { SceneGraphAdapter } from "./scene-graph-adapter";
+import { SceneInteractionAdapter } from "./scene-interaction-adapter";
 
 interface CameraPose {
   position: Vec3Model;
@@ -15,6 +18,11 @@ interface CameraPose {
 
 interface SceneAdapterOptions {
   onCameraInteractionEnd: (pose: CameraPose) => void;
+  onObjectSelected: (objectId: string | null) => void;
+  onObjectTransformCommitted: (
+    objectId: string,
+    transform: TransformModel,
+  ) => void;
 }
 
 export class SceneAdapter {
@@ -23,6 +31,7 @@ export class SceneAdapter {
   readonly #renderer: THREE.WebGLRenderer;
   readonly #controls: OrbitControls;
   readonly #sceneGraph: SceneGraphAdapter;
+  readonly #interaction: SceneInteractionAdapter;
   readonly #resizeObserver: ResizeObserver;
   readonly #grid = new THREE.GridHelper(24, 24, 0x526078, 0x303846);
   readonly #axes = new THREE.AxesHelper(2.5);
@@ -40,6 +49,17 @@ export class SceneAdapter {
     this.#renderer = this.#createRenderer();
     this.#controls = this.#createControls(model.camera);
     this.#sceneGraph = new SceneGraphAdapter(this.#scene);
+    this.#interaction = new SceneInteractionAdapter(
+      this.#scene,
+      this.#camera,
+      this.#renderer.domElement,
+      this.#sceneGraph,
+      this.#controls,
+      {
+        onObjectSelected: options.onObjectSelected,
+        onObjectTransformCommitted: options.onObjectTransformCommitted,
+      },
+    );
 
     this.#scene.add(this.#grid, this.#axes);
     this.applyModel(model);
@@ -59,11 +79,21 @@ export class SceneAdapter {
     this.#applyCamera(model.camera);
 
     this.#sceneGraph.applyModel(model.objects, model.lights);
+    this.#interaction.refreshSelection();
+  }
+
+  setSelection(objectId: string | null): void {
+    this.#interaction.setSelection(objectId);
+  }
+
+  setTransformMode(mode: TransformMode): void {
+    this.#interaction.setTransformMode(mode);
   }
 
   dispose(): void {
     this.#renderer.setAnimationLoop(null);
     this.#resizeObserver.disconnect();
+    this.#interaction.dispose();
     this.#controls.dispose();
 
     this.#sceneGraph.dispose();

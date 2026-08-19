@@ -1,4 +1,8 @@
-import type { SceneModel, Vec3Model } from "../model/scene-model";
+import type {
+  DeepReadonly,
+  SceneSnapshot,
+  Vec3Model,
+} from "../model/scene-model";
 
 interface AppActions {
   toggleGrid: () => void;
@@ -36,7 +40,7 @@ export class AppShell {
     );
   }
 
-  update(model: Readonly<SceneModel>): void {
+  update(model: SceneSnapshot): void {
     this.#setPressed(this.#gridButton, model.helpers.gridVisible);
     this.#setPressed(this.#axesButton, model.helpers.axesVisible);
     this.#query("[data-camera-position]").textContent = this.#format(model.camera.position);
@@ -76,7 +80,7 @@ export class AppShell {
     button.classList.toggle("is-active", pressed);
   }
 
-  #format(vector: Readonly<Vec3Model>): string {
+  #format(vector: DeepReadonly<Vec3Model>): string {
     return `${vector.x.toFixed(2)}, ${vector.y.toFixed(2)}, ${vector.z.toFixed(2)}`;
   }
 

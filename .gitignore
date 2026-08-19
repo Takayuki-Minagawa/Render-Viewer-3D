@@ -3,3 +3,6 @@ dist/
 *.local
 *.log
 .DS_Store
+
+# Local source requirements; do not publish with the application.
+AI依頼書.md

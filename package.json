@@ -2,6 +2,15 @@
   "name": "render-viewer-3d",
   "version": "0.1.0",
   "private": true,
+  "description": "A browser-based, parameter-driven 3D scene editor built with TypeScript and Three.js.",
+  "homepage": "https://takayuki-minagawa.github.io/Render-Viewer-3D/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Takayuki-Minagawa/Render-Viewer-3D.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Takayuki-Minagawa/Render-Viewer-3D/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

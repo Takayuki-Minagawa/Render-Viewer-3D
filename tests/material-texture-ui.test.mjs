@@ -9,6 +9,7 @@ let basicEditorSource;
 let libraryCssSource;
 let libraryViewSource;
 let materialTextureErrorDetail;
+let materialTextureErrorMessageKey;
 let sceneEditorSource;
 let server;
 let syncMaterialTextureStatus;
@@ -22,9 +23,8 @@ before(async () => {
   ({ syncMaterialTextureStatus } = await server.ssrLoadModule(
     "/src/ui/material-basic-editor.ts",
   ));
-  ({ materialTextureErrorDetail } = await server.ssrLoadModule(
-    "/src/ui/app-shell.ts",
-  ));
+  ({ materialTextureErrorDetail, materialTextureErrorMessageKey } =
+    await server.ssrLoadModule("/src/ui/app-shell.ts"));
   ({ MATERIAL_TEXTURE_FILE_ACCEPT } = await server.ssrLoadModule(
     "/src/model/material/material-color-map.ts",
   ));
@@ -93,7 +93,7 @@ describe("material texture picker UI", () => {
     );
     assert.match(
       source,
-      /kind: "error", detail: materialTextureErrorDetail\(error, this\.#preferences\.locale\),/u,
+      /kind: "error", detail: materialTextureErrorMessageKey\(error\),/u,
     );
   });
 
@@ -202,14 +202,14 @@ describe("material texture status accessibility", () => {
 
     syncMaterialTextureStatus(root, "material-1", "en", {
       kind: "error",
-      detail: "Unsupported image.",
+      detail: "material.textureErrorUnsupported",
     });
     assert.equal(message.hidden, false);
     assert.equal(message.dataset.kind, "error");
     assert.equal(message.getAttribute("role"), "alert");
     assert.equal(
       message.textContent,
-      "The image could not be applied. Unsupported image.",
+      "The image could not be applied. Choose a static PNG, JPEG, or WebP image.",
     );
 
     syncMaterialTextureStatus(root, "material-1", "en", { kind: "idle" });
@@ -237,6 +237,32 @@ describe("material texture status accessibility", () => {
     assert.match(
       source,
       /syncMaterialTextureStatus\( this\.#detail, material\.id, this\.#locale, this\.#textureStatuses\.get\(material\.id\) \?\? \{ kind: "idle" \}, \);/u,
+    );
+  });
+
+  it("retranslates both error parts after English-Japanese locale changes", () => {
+    const { root, message } = createTextureStatusRoot("material-1");
+    const status = {
+      kind: "error",
+      detail: materialTextureErrorMessageKey({ code: "unsupported-format" }),
+    };
+
+    syncMaterialTextureStatus(root, "material-1", "en", status);
+    assert.equal(
+      message.textContent,
+      "The image could not be applied. Choose a static PNG, JPEG, or WebP image.",
+    );
+
+    syncMaterialTextureStatus(root, "material-1", "ja", status);
+    assert.equal(
+      message.textContent,
+      "画像を適用できませんでした。 PNG / JPEG / WebP の静止画像を選択してください。",
+    );
+
+    syncMaterialTextureStatus(root, "material-1", "en", status);
+    assert.equal(
+      message.textContent,
+      "The image could not be applied. Choose a static PNG, JPEG, or WebP image.",
     );
   });
 });

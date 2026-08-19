@@ -366,6 +366,64 @@ describe("MaterialRuntimeCache local color maps", () => {
     assert.equal(loaded.images[1].closeCount, 1);
   });
 
+  it("retries the glTF texture variant after lease capacity recovers", async () => {
+    const loaded = await createLoadedAssets(
+      [
+        [100, 100],
+        [100, 100],
+      ],
+      200_000,
+    );
+    const [firstDescriptor, secondDescriptor] = loaded.descriptors;
+    const definition = createTexturedDefinition("retry", firstDescriptor);
+    const materials = new MaterialRuntimeCache(loaded.store);
+    materials.reconcile([definition]);
+
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial(),
+    );
+    const importedAssets = new ImportedAssetStore();
+    importedAssets.register("retry-asset", new THREE.Group().add(mesh));
+    const adapter = new ImportedSceneAdapter(
+      new THREE.Scene(),
+      importedAssets,
+      materials,
+    );
+    const model = createImportedModel({
+      id: "retry-model",
+      assetId: "retry-asset",
+      format: "glTF",
+    });
+    model.materialMode = "custom";
+    model.customMaterialId = definition.id;
+
+    adapter.applyModel([model], [definition]);
+    const fallback = mesh.material;
+    assert.equal(fallback.map, null);
+    assert.equal(fallback.userData.materialTextureFallback, true);
+    assert.equal(loaded.store.residentBytes, 186_668);
+
+    assert.equal(loaded.store.delete(secondDescriptor.assetId), true);
+    assert.equal(loaded.images[1].closeCount, 1);
+    assert.equal(loaded.store.residentBytes, 93_334);
+
+    adapter.applyModel([model], [definition]);
+    const recovered = mesh.material;
+    assert.notEqual(recovered, fallback);
+    assert.ok(recovered instanceof THREE.MeshPhysicalMaterial);
+    assert.ok(recovered.map instanceof THREE.Texture);
+    assert.equal(recovered.userData.materialTextureUvOrigin, "top-left");
+    assert.equal(loaded.store.residentBytes, 146_668);
+
+    adapter.dispose();
+    materials.dispose();
+    assert.equal(loaded.store.delete(firstDescriptor.assetId), true);
+    assert.equal(loaded.images[0].closeCount, 1);
+    loaded.store.dispose();
+  });
+
+
   it("uses a stable untextured fallback only for imported meshes without usable UVs", async () => {
     const asset = await createLoadedAsset(8, 8);
     const definition = createTexturedDefinition("custom", asset.descriptor);
@@ -456,7 +514,7 @@ async function createLoadedAsset(width, height) {
   return { store, descriptor, image };
 }
 
-async function createLoadedAssets(dimensions) {
+async function createLoadedAssets(dimensions, maxResidentBytes) {
   const images = dimensions.map(([width, height]) =>
     trackedImage(width, height),
   );
@@ -466,7 +524,7 @@ async function createLoadedAssets(dimensions) {
     decodeIndex += 1;
     if (!image) throw new Error("Unexpected material image decode.");
     return image.image;
-  });
+  }, maxResidentBytes);
   const descriptors = [];
   for (let index = 0; index < dimensions.length; index += 1) {
     const [width, height] = dimensions[index];

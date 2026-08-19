@@ -13,7 +13,7 @@ export type MaterialTextureUiStatus =
   | { readonly kind: "idle" }
   | { readonly kind: "busy" }
   | { readonly kind: "success" }
-  | { readonly kind: "error"; readonly detail: string };
+  | { readonly kind: "error"; readonly detail: MessageKey };
 
 interface BasicNumberField {
   readonly key: MaterialPreviewField;
@@ -148,7 +148,7 @@ export function syncMaterialTextureStatus(
         : "material.textureError";
   message.textContent =
     translate(locale, key) +
-    (status.kind === "error" ? " " + status.detail : "");
+    (status.kind === "error" ? " " + translate(locale, status.detail) : "");
 }
 
 function renderMaterialColorMapEditor(

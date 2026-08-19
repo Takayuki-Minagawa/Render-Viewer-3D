@@ -167,6 +167,10 @@ export function materialTextureErrorDetail(
   error: unknown,
   locale: AppLocale,
 ): string {
+  return translate(locale, materialTextureErrorMessageKey(error));
+}
+
+export function materialTextureErrorMessageKey(error: unknown): MessageKey {
   let code: unknown;
   if (
     (typeof error === "object" && error !== null) ||
@@ -182,7 +186,7 @@ export function materialTextureErrorDetail(
     typeof code === "string"
       ? MATERIAL_TEXTURE_ERROR_MESSAGES.get(code)
       : undefined;
-  return translate(locale, key ?? "material.textureErrorUnknown");
+  return key ?? "material.textureErrorUnknown";
 }
 
 const TRANSFORM_GROUPS = new Set<TransformGroup>([
@@ -687,7 +691,7 @@ export class AppShell {
       console.error("Material texture loading failed.", error);
       this.#materialLibrary.setTextureStatus(materialId, {
         kind: "error",
-        detail: materialTextureErrorDetail(error, this.#preferences.locale),
+        detail: materialTextureErrorMessageKey(error),
       });
     }
   }

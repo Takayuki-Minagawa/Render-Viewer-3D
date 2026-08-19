@@ -16,11 +16,25 @@ import {
   type MaterialTextureUvOrigin,
 } from "./material/material-runtime-cache";
 
+interface ImportedAssetUvProfile {
+  readonly meshes: readonly ImportedMesh[];
+  readonly hasUsableTextureCoordinates: boolean;
+  readonly hasMissingTextureCoordinates: boolean;
+  readonly usableMeshes: WeakSet<ImportedMesh>;
+}
+
+interface ResolvedImportedMaterialRuntime {
+  readonly texturedMaterial: THREE.MeshPhysicalMaterial;
+  readonly fallbackMaterial: THREE.MeshPhysicalMaterial;
+  readonly uvProfile: ImportedAssetUvProfile;
+}
+
 interface ImportedSceneEntry {
   readonly assetId: string;
   readonly asset: ImportedAssetRuntime;
   readonly rootSignature: string;
   readonly materialSignature: string;
+  readonly materialRuntime?: ResolvedImportedMaterialRuntime;
 }
 
 export class ImportedSceneAdapter {
@@ -29,6 +43,10 @@ export class ImportedSceneAdapter {
   readonly #materials: MaterialRuntimeCache;
   readonly #ownsMaterials: boolean;
   readonly #entries = new Map<string, ImportedSceneEntry>();
+  readonly #uvProfiles = new WeakMap<
+    ImportedAssetRuntime,
+    ImportedAssetUvProfile
+  >();
 
   constructor(
     scene: THREE.Scene,
@@ -62,13 +80,11 @@ export class ImportedSceneAdapter {
       }
       if (asset.root.parent !== this.#scene) this.#scene.add(asset.root);
       const rootSignature = importedRootSignature(model);
+      const materialRuntime = this.#resolveMaterialRuntime(asset, model);
       const materialSignature = importedMaterialSignature(
         model,
         materialDefinitions,
-        Boolean(
-          model.customMaterialId &&
-            this.#materials.getMaterial(model.customMaterialId)?.map,
-        ),
+        Boolean(materialRuntime?.texturedMaterial.map),
       );
       this.#applyImportedScene(
         asset,
@@ -76,12 +92,14 @@ export class ImportedSceneAdapter {
         previous,
         rootSignature,
         materialSignature,
+        materialRuntime,
       );
       nextEntries.set(model.id, {
         assetId: model.assetId,
         asset,
         rootSignature,
         materialSignature,
+        materialRuntime,
       });
     }
 
@@ -167,12 +185,67 @@ export class ImportedSceneAdapter {
     return resolved;
   }
 
+  #resolveMaterialRuntime(
+    asset: ImportedAssetRuntime,
+    model: ImportedSceneSnapshot,
+  ): ResolvedImportedMaterialRuntime | undefined {
+    if (model.materialMode !== "custom") return undefined;
+    const materialId = model.customMaterialId;
+    if (!materialId) {
+      throw new Error(
+        `Custom material mode requires a material id for imported scene: ${model.id}`,
+      );
+    }
+
+    const uvProfile = this.#getUvProfile(asset);
+    const defaultMaterial = this.#materials.requireMaterial(materialId);
+    const fallbackMaterial =
+      uvProfile.hasMissingTextureCoordinates && defaultMaterial.map
+        ? this.#materials.requireUntexturedMaterial(materialId)
+        : defaultMaterial;
+    const texturedMaterial = uvProfile.hasUsableTextureCoordinates
+      ? this.#materials.requireMaterial(
+          materialId,
+          textureUvOriginForFormat(model.format),
+        )
+      : defaultMaterial;
+    return { texturedMaterial, fallbackMaterial, uvProfile };
+  }
+
+  #getUvProfile(asset: ImportedAssetRuntime): ImportedAssetUvProfile {
+    const cached = this.#uvProfiles.get(asset);
+    if (cached) return cached;
+
+    const meshes: ImportedMesh[] = [];
+    const usableMeshes = new WeakSet<ImportedMesh>();
+    let hasUsableMeshes = false;
+    let hasMissingMeshes = false;
+    asset.forEachMesh((mesh) => {
+      meshes.push(mesh);
+      if (hasUsableTextureCoordinates(mesh.geometry)) {
+        usableMeshes.add(mesh);
+        hasUsableMeshes = true;
+      } else {
+        hasMissingMeshes = true;
+      }
+    });
+    const profile = {
+      hasUsableTextureCoordinates: hasUsableMeshes,
+      meshes,
+      hasMissingTextureCoordinates: hasMissingMeshes,
+      usableMeshes,
+    };
+    this.#uvProfiles.set(asset, profile);
+    return profile;
+  }
+
   #applyImportedScene(
     asset: ImportedAssetRuntime,
     model: ImportedSceneSnapshot,
     previous: ImportedSceneEntry | undefined,
     rootSignature: string,
     materialSignature: string,
+    materialRuntime: ResolvedImportedMaterialRuntime | undefined,
   ): void {
     const prior = previous?.asset === asset ? previous : undefined;
     const { root } = asset;
@@ -204,34 +277,29 @@ export class ImportedSceneAdapter {
       );
     }
 
-    if (!prior || prior.materialSignature !== materialSignature) {
+    const resolvedMaterialChanged =
+      prior?.materialRuntime?.texturedMaterial !==
+        materialRuntime?.texturedMaterial ||
+      prior?.materialRuntime?.fallbackMaterial !==
+        materialRuntime?.fallbackMaterial;
+    if (
+      !prior ||
+      prior.materialSignature !== materialSignature ||
+      resolvedMaterialChanged
+    ) {
       if (model.materialMode === "imported") {
         asset.restoreOriginalMaterials();
       } else {
-        const materialId = model.customMaterialId;
-        if (!materialId) {
+        if (!materialRuntime) {
           throw new Error(
-            `Custom material mode requires a material id for imported scene: ${model.id}`,
+            `Missing custom material runtime for imported scene: ${model.id}`,
           );
         }
-        const defaultMaterial = this.#materials.requireMaterial(materialId);
-        const fallback = defaultMaterial.map
-          ? this.#materials.requireUntexturedMaterial(materialId)
-          : defaultMaterial;
-        const uvOrigin = textureUvOriginForFormat(model.format);
-        let texturedMaterial =
-          uvOrigin === "bottom-left" ? defaultMaterial : undefined;
-        asset.forEachMesh((mesh) => {
-          if (!hasUsableTextureCoordinates(mesh.geometry)) {
-            mesh.material = fallback;
-            return;
-          }
-          texturedMaterial ??= this.#materials.requireMaterial(
-            materialId,
-            uvOrigin,
-          );
-          mesh.material = texturedMaterial;
-        });
+        for (const mesh of materialRuntime.uvProfile.meshes) {
+          mesh.material = materialRuntime.uvProfile.usableMeshes.has(mesh)
+            ? materialRuntime.texturedMaterial
+            : materialRuntime.fallbackMaterial;
+        }
       }
     }
   }

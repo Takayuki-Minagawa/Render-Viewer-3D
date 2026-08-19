@@ -20,6 +20,7 @@ export function createApplication(root: HTMLElement): Application {
         });
       },
     });
+    shell.refreshPreferences();
 
     const unsubscribe = store.subscribe((model) => {
       adapter.applyModel(model);
@@ -54,9 +55,7 @@ export function createApplication(root: HTMLElement): Application {
       },
     };
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "WebGLを初期化できませんでした。";
-    shell.setError(message);
+    shell.setError();
     throw error;
   }
 }

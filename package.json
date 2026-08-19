@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test tests/refactoring.test.mjs",
+    "test": "node --test tests/refactoring.test.mjs tests/ui-settings.test.mjs",
     "prebuild": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",

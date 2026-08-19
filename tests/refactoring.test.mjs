@@ -84,6 +84,35 @@ describe("SceneGraphAdapter", () => {
 
     const box = findMesh(scene, "box-01");
     const ground = findMesh(scene, "ground-01");
+    assert.equal(box.name, "Box 01");
+    assert.deepEqual(box.position.toArray(), [0, 1, 0]);
+    assert.ok(
+      nearlyEqual(box.rotation.y, THREE.MathUtils.degToRad(-18)),
+    );
+    assert.deepEqual(box.scale.toArray(), [1, 1, 1]);
+    assert.equal(box.castShadow, true);
+    assert.equal(box.receiveShadow, true);
+    assert.equal(box.material.color.getHexString(THREE.SRGBColorSpace), "5f8cff");
+    assert.equal(box.material.metalness, 0.08);
+    assert.equal(box.material.roughness, 0.32);
+    assert.deepEqual(ground.position.toArray(), [0, -0.02, 0]);
+    assert.ok(nearlyEqual(ground.rotation.x, -Math.PI / 2));
+    assert.equal(ground.receiveShadow, true);
+
+    const ambient = findLight(scene, THREE.AmbientLight, "Ambient Light");
+    const directional = findLight(scene, THREE.DirectionalLight, "Key Light");
+    assert.equal(ambient.color.getHexString(THREE.SRGBColorSpace), "c2d2ff");
+    assert.equal(ambient.intensity, 0.65);
+    assert.equal(ambient.visible, true);
+    assert.equal(
+      directional.color.getHexString(THREE.SRGBColorSpace),
+      "fff4e4",
+    );
+    assert.equal(directional.intensity, 3.2);
+    assert.deepEqual(directional.position.toArray(), [5, 8, 4]);
+    assert.deepEqual(directional.target.position.toArray(), [0, 0.6, 0]);
+    assert.equal(directional.castShadow, true);
+
     const originalBoxGeometry = box.geometry;
     let boxGeometryDisposed = false;
     let groundGeometryDisposed = false;
@@ -102,7 +131,26 @@ describe("SceneGraphAdapter", () => {
     assert.equal(findMesh(scene, "box-01").geometry, originalBoxGeometry);
 
     const next = structuredClone(model);
+    next.objects[0].name = "Updated Box";
     next.objects[0].geometry.width = 3;
+    next.objects[0].visible = false;
+    next.objects[0].transform.position = { x: 2, y: 3, z: 4 };
+    next.objects[0].transform.rotationDegrees = { x: 10, y: 20, z: 30 };
+    next.objects[0].transform.scale = { x: 1.5, y: 2, z: 0.5 };
+    next.objects[0].material = {
+      color: "#ff8844",
+      metalness: 0.4,
+      roughness: 0.6,
+    };
+    next.objects[0].castShadow = false;
+    next.objects[0].receiveShadow = false;
+    next.lights[0].color = "#88aaff";
+    next.lights[0].intensity = 0.25;
+    next.lights[1].color = "#ffcc88";
+    next.lights[1].intensity = 1.7;
+    next.lights[1].position = { x: 7, y: 6, z: 5 };
+    next.lights[1].target = { x: 1, y: 2, z: 3 };
+    next.lights[1].castShadow = false;
     next.objects.splice(1, 1);
     next.objects.push({
       ...structuredClone(next.objects[0]),
@@ -112,6 +160,47 @@ describe("SceneGraphAdapter", () => {
     adapter.applyModel(next.objects, next.lights);
 
     assert.notEqual(findMesh(scene, "box-01").geometry, originalBoxGeometry);
+    const updatedBox = findMesh(scene, "box-01");
+    assert.equal(updatedBox.name, "Updated Box");
+    assert.equal(updatedBox.visible, false);
+    assert.deepEqual(updatedBox.position.toArray(), [2, 3, 4]);
+    assert.ok(
+      nearlyEqual(updatedBox.rotation.x, THREE.MathUtils.degToRad(10)),
+    );
+    assert.ok(
+      nearlyEqual(updatedBox.rotation.y, THREE.MathUtils.degToRad(20)),
+    );
+    assert.ok(
+      nearlyEqual(updatedBox.rotation.z, THREE.MathUtils.degToRad(30)),
+    );
+    assert.deepEqual(updatedBox.scale.toArray(), [1.5, 2, 0.5]);
+    assert.equal(updatedBox.castShadow, false);
+    assert.equal(updatedBox.receiveShadow, false);
+    assert.equal(
+      updatedBox.material.color.getHexString(THREE.SRGBColorSpace),
+      "ff8844",
+    );
+    assert.equal(updatedBox.material.metalness, 0.4);
+    assert.equal(updatedBox.material.roughness, 0.6);
+    const updatedAmbient = findLight(scene, THREE.AmbientLight, "Ambient Light");
+    const updatedDirectional = findLight(
+      scene,
+      THREE.DirectionalLight,
+      "Key Light",
+    );
+    assert.equal(
+      updatedAmbient.color.getHexString(THREE.SRGBColorSpace),
+      "88aaff",
+    );
+    assert.equal(updatedAmbient.intensity, 0.25);
+    assert.equal(
+      updatedDirectional.color.getHexString(THREE.SRGBColorSpace),
+      "ffcc88",
+    );
+    assert.equal(updatedDirectional.intensity, 1.7);
+    assert.deepEqual(updatedDirectional.position.toArray(), [7, 6, 5]);
+    assert.deepEqual(updatedDirectional.target.position.toArray(), [1, 2, 3]);
+    assert.equal(updatedDirectional.castShadow, false);
     assert.deepEqual(
       findMeshes(scene)
         .map((mesh) => mesh.userData.sceneModelId)
@@ -184,4 +273,16 @@ function findMesh(scene, id) {
 
 function findLights(scene) {
   return scene.children.filter((child) => child instanceof THREE.Light);
+}
+
+function findLight(scene, LightType, name) {
+  const light = scene.children.find(
+    (child) => child instanceof LightType && child.name === name,
+  );
+  assert.ok(light, `Expected light ${name}`);
+  return light;
+}
+
+function nearlyEqual(actual, expected) {
+  return Math.abs(actual - expected) < 1e-10;
 }

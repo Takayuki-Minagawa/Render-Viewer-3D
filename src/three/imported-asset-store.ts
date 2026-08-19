@@ -48,10 +48,21 @@ export class ImportedAssetRuntime {
     this.root.removeFromParent();
     this.root.remove(this.sourceRoot);
 
-    for (const instancedMesh of this.#ownedInstancedMeshes) instancedMesh.dispose();
-    for (const skeleton of this.#ownedSkeletons) skeleton.dispose();
-
     const textures = new Set<THREE.Texture>();
+    for (const instancedMesh of this.#ownedInstancedMeshes) {
+      if (instancedMesh.morphTexture) {
+        textures.add(instancedMesh.morphTexture);
+        instancedMesh.morphTexture = null;
+      }
+      instancedMesh.dispose();
+    }
+    for (const skeleton of this.#ownedSkeletons) {
+      if (skeleton.boneTexture) {
+        textures.add(skeleton.boneTexture);
+        skeleton.boneTexture = null;
+      }
+      skeleton.dispose();
+    }
     for (const material of this.#ownedMaterials) {
       collectMaterialTextures(material, textures);
     }

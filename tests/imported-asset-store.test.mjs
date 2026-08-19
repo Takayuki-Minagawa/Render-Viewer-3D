@@ -118,19 +118,17 @@ describe("ImportedAssetStore", () => {
     assert.equal(image.count, 1);
   });
 
-  it("disposes shared skeletons and instanced-mesh GPU resources once", () => {
+  it("disposes shared special textures once and each GPU owner once", () => {
     const store = new ImportedAssetStore();
     const root = new THREE.Group();
-    const skeleton = new THREE.Skeleton([new THREE.Bone()]);
     const boneTexture = new THREE.DataTexture();
-    skeleton.boneTexture = boneTexture;
+    const firstSkeleton = new THREE.Skeleton([new THREE.Bone()]);
+    const secondSkeleton = new THREE.Skeleton([new THREE.Bone()]);
+    firstSkeleton.boneTexture = boneTexture;
+    secondSkeleton.boneTexture = boneTexture;
     const boneTextureDisposal = trackDisposal(boneTexture);
-    const originalSkeletonDispose = skeleton.dispose.bind(skeleton);
-    const skeletonDisposal = { count: 0 };
-    skeleton.dispose = () => {
-      skeletonDisposal.count += 1;
-      originalSkeletonDispose();
-    };
+    const firstSkeletonDisposal = trackSkeletonDisposal(firstSkeleton);
+    const secondSkeletonDisposal = trackSkeletonDisposal(secondSkeleton);
 
     const firstSkinned = new THREE.SkinnedMesh(
       new THREE.BoxGeometry(),
@@ -140,34 +138,56 @@ describe("ImportedAssetStore", () => {
       new THREE.BoxGeometry(),
       new THREE.MeshBasicMaterial(),
     );
-    firstSkinned.bind(skeleton);
-    secondSkinned.bind(skeleton);
-    const instanced = new THREE.InstancedMesh(
+    const thirdSkinned = new THREE.SkinnedMesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+    );
+    firstSkinned.bind(firstSkeleton);
+    secondSkinned.bind(firstSkeleton);
+    thirdSkinned.bind(secondSkeleton);
+
+    const firstInstanced = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+      2,
+    );
+    const secondInstanced = new THREE.InstancedMesh(
       new THREE.BoxGeometry(),
       new THREE.MeshBasicMaterial(),
       2,
     );
     const morphTexture = new THREE.DataTexture();
-    instanced.morphTexture = morphTexture;
+    firstInstanced.morphTexture = morphTexture;
+    secondInstanced.morphTexture = morphTexture;
     const morphTextureDisposal = trackDisposal(morphTexture);
-    const instancedDisposal = { count: 0 };
-    instanced.addEventListener("dispose", () => {
-      instancedDisposal.count += 1;
-    });
-    root.add(firstSkinned, secondSkinned, instanced);
+    const firstInstancedDisposal = trackDisposeEvent(firstInstanced);
+    const secondInstancedDisposal = trackDisposeEvent(secondInstanced);
+    root.add(
+      firstSkinned,
+      secondSkinned,
+      thirdSkinned,
+      firstInstanced,
+      secondInstanced,
+    );
 
     store.register("asset-01", root);
     assert.equal(store.delete("asset-01"), true);
-    assert.equal(skeletonDisposal.count, 1);
+    assert.equal(firstSkeletonDisposal.count, 1);
+    assert.equal(secondSkeletonDisposal.count, 1);
     assert.equal(boneTextureDisposal.count, 1);
-    assert.equal(skeleton.boneTexture, null);
-    assert.equal(instancedDisposal.count, 1);
+    assert.equal(firstSkeleton.boneTexture, null);
+    assert.equal(secondSkeleton.boneTexture, null);
+    assert.equal(firstInstancedDisposal.count, 1);
+    assert.equal(secondInstancedDisposal.count, 1);
     assert.equal(morphTextureDisposal.count, 1);
-    assert.equal(instanced.morphTexture, null);
+    assert.equal(firstInstanced.morphTexture, null);
+    assert.equal(secondInstanced.morphTexture, null);
 
     store.dispose();
-    assert.equal(skeletonDisposal.count, 1);
-    assert.equal(instancedDisposal.count, 1);
+    assert.equal(firstSkeletonDisposal.count, 1);
+    assert.equal(secondSkeletonDisposal.count, 1);
+    assert.equal(firstInstancedDisposal.count, 1);
+    assert.equal(secondInstancedDisposal.count, 1);
   });
 
   it("rejects a skeleton shared across independently owned assets", () => {
@@ -200,6 +220,24 @@ function trackDisposal(resource) {
   resource.dispose = () => {
     tracker.count += 1;
   };
+  return tracker;
+}
+
+function trackSkeletonDisposal(skeleton) {
+  const tracker = { count: 0 };
+  const originalDispose = skeleton.dispose.bind(skeleton);
+  skeleton.dispose = () => {
+    tracker.count += 1;
+    originalDispose();
+  };
+  return tracker;
+}
+
+function trackDisposeEvent(resource) {
+  const tracker = { count: 0 };
+  resource.addEventListener("dispose", () => {
+    tracker.count += 1;
+  });
   return tracker;
 }
 

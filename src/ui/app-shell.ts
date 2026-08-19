@@ -1,4 +1,5 @@
 import type { EditorState, TransformMode } from "../app/editor-store";
+import type { MaterialPresetId } from "../model/material/material-model";
 import type { GeometryModel, SceneSnapshot } from "../model/scene-model";
 import {
   loadAppPreferences,
@@ -8,6 +9,10 @@ import {
   type AppPreferences,
 } from "./app-preferences";
 import { translate, type MessageKey } from "./i18n";
+import {
+  MaterialLibraryView,
+  type MaterialPreviewField,
+} from "./material-library";
 import {
   SceneEditorView,
   type GeometryNumericKey,
@@ -37,6 +42,22 @@ export interface AppActions {
   duplicateObject: (id: string) => void;
   deleteObject: (id: string) => void;
   setTransformMode: (mode: TransformMode) => void;
+  createMaterialFromPreset: (presetId: MaterialPresetId) => void;
+  assignMaterial: (objectId: string, materialId: string) => void;
+  duplicateMaterial: (materialId: string) => void;
+  renameMaterial: (materialId: string, name: string) => void;
+  deleteMaterial: (materialId: string) => void;
+  makeMaterialUnique: (objectId: string) => void;
+  updateMaterialPreview: (
+    materialId: string,
+    field: MaterialPreviewField,
+    value: unknown,
+  ) => void;
+  updateMaterialPovScalar: (
+    materialId: string,
+    path: string,
+    value: number,
+  ) => void;
 }
 
 export type { GeometryNumericKey, TransformAxis, TransformGroup };
@@ -50,6 +71,16 @@ const GEOMETRY_TYPES = new Set<GeometryModel["type"]>([
   "cone",
   "plane",
   "torus",
+]);
+const MATERIAL_PRESETS = new Set<MaterialPresetId>([
+  "concrete",
+  "matte-plastic",
+  "glossy-plastic",
+  "metal",
+  "glass",
+  "frosted-glass",
+  "matte",
+  "wood-base",
 ]);
 const TRANSFORM_MODES = new Set<TransformMode>([
   "translate",
@@ -92,6 +123,7 @@ export class AppShell {
   readonly #loadingElement: HTMLElement;
   readonly #statusText: HTMLElement;
   readonly #editorView: SceneEditorView;
+  readonly #materialLibrary: MaterialLibraryView;
   #preferences: AppPreferences;
   #status: UiStatus = "initializing";
   #model: SceneSnapshot | undefined;
@@ -110,6 +142,7 @@ export class AppShell {
     this.#loadingElement = this.#query("[data-loading]");
     this.#statusText = this.#query("[data-status]");
     this.#editorView = new SceneEditorView(this.#root);
+    this.#materialLibrary = new MaterialLibraryView(this.#root);
     this.#applyPreferences();
   }
 
@@ -155,10 +188,13 @@ export class AppShell {
       options,
     );
     this.#root.addEventListener(
+      "keydown",
+      (event) => this.#materialLibrary.handleUiKeydown(event),
+      options,
+    );
+    this.#root.addEventListener(
       "focusout",
-      () => {
-        queueMicrotask(() => this.#renderEditor());
-      },
+      (event) => this.#handleEditorFocusOut(event),
       options,
     );
     document.addEventListener(
@@ -211,18 +247,87 @@ export class AppShell {
   }
 
   #renderEditor(): void {
-    if (this.#model) {
-      this.#editorView.render(
-        this.#model,
-        this.#editorState,
-        this.#preferences.locale,
-      );
-    }
+    if (!this.#model) return;
+    this.#editorView.render(
+      this.#model,
+      this.#editorState,
+      this.#preferences.locale,
+    );
+    this.#materialLibrary.render(
+      this.#model.materials,
+      this.#model.objects.map(({ id, name, materialId }) => ({
+        id,
+        name,
+        materialId,
+      })),
+      this.#editorState.selectedObjectId,
+      this.#preferences.locale,
+    );
   }
 
   #handleEditorClick(event: MouseEvent, actions: AppActions): void {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    if (this.#materialLibrary.handleUiClick(target)) return;
+
+    const openMaterial = target.closest<HTMLElement>(
+      "[data-open-material-library]",
+    );
+    if (openMaterial) {
+      this.#materialLibrary.open(openMaterial.dataset.openMaterialLibrary);
+      return;
+    }
+
+    if (target.closest("[data-create-material-from-preset]")) {
+      const presetId = this.#materialLibrary.selectedPresetId;
+      if (this.#isMaterialPreset(presetId)) {
+        actions.createMaterialFromPreset(presetId);
+      }
+      return;
+    }
+
+    const assignMaterialId = target.closest<HTMLElement>("[data-assign-material]")
+      ?.dataset.assignMaterial;
+    if (assignMaterialId && this.#editorState.selectedObjectId) {
+      actions.assignMaterial(this.#editorState.selectedObjectId, assignMaterialId);
+      return;
+    }
+
+    const duplicateMaterialId = target.closest<HTMLElement>(
+      "[data-duplicate-material]",
+    )?.dataset.duplicateMaterial;
+    if (duplicateMaterialId) {
+      actions.duplicateMaterial(duplicateMaterialId);
+      return;
+    }
+
+    const deleteMaterialId = target.closest<HTMLElement>(
+      "[data-delete-material]",
+    )?.dataset.deleteMaterial;
+    if (deleteMaterialId) {
+      actions.deleteMaterial(deleteMaterialId);
+      return;
+    }
+
+    const makeUniqueObjectId = target.closest<HTMLElement>(
+      "[data-make-material-unique]",
+    )?.dataset.makeMaterialUnique;
+    if (makeUniqueObjectId) {
+      actions.makeMaterialUnique(makeUniqueObjectId);
+      return;
+    }
+
+    const previewPreset = target.closest<HTMLElement>(
+      "[data-material-preview-value]",
+    );
+    const previewValue = Number(previewPreset?.dataset.materialPreviewValue);
+    const previewId = previewPreset?.dataset.materialPreviewId;
+    const previewField = previewPreset?.dataset
+      .materialPreviewField as MaterialPreviewField | undefined;
+    if (previewId && previewField && Number.isFinite(previewValue)) {
+      actions.updateMaterialPreview(previewId, previewField, previewValue);
+      return;
+    }
 
     const addButton = target.closest<HTMLButtonElement>("[data-add-primitive]");
     const primitive = addButton?.dataset.addPrimitive;
@@ -274,32 +379,103 @@ export class AppShell {
 
   #handleEditorInput(event: Event, actions: AppActions): void {
     const input = event.target;
+    if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement)) {
+      return;
+    }
+    if (this.#materialLibrary.handleUiInput(input)) return;
+
+    if (input instanceof HTMLInputElement) {
+      const renameMaterialId = input.dataset.renameMaterial;
+      if (renameMaterialId) {
+        actions.renameMaterial(renameMaterialId, input.value);
+        return;
+      }
+
+      const materialId = input.dataset.materialPreviewId;
+      const materialField = input.dataset
+        .materialPreviewField as MaterialPreviewField | undefined;
+      if (materialId && materialField) {
+        const value =
+          input.type === "checkbox"
+            ? input.checked
+            : input.type === "number" || input.type === "range"
+              ? input.valueAsNumber
+              : input.value;
+        if (typeof value !== "number" || Number.isFinite(value)) {
+          actions.updateMaterialPreview(materialId, materialField, value);
+        }
+        return;
+      }
+
+      const materialPovId = input.dataset.materialPovId;
+      const materialPovPath = input.dataset.materialPovPath;
+      if (
+        materialPovId &&
+        materialPovPath &&
+        Number.isFinite(input.valueAsNumber)
+      ) {
+        actions.updateMaterialPovScalar(
+          materialPovId,
+          materialPovPath,
+          input.valueAsNumber,
+        );
+        return;
+      }
+
+      const nameId = input.dataset.objectNameInput;
+      if (nameId) {
+        actions.updateObjectName(nameId, input.value);
+        return;
+      }
+
+      const objectId = input.dataset.objectId;
+      if (!objectId || !Number.isFinite(input.valueAsNumber)) return;
+
+      const group = input.dataset.transformGroup;
+      const axis = input.dataset.axis;
+      if (this.#isTransformGroup(group) && this.#isTransformAxis(axis)) {
+        actions.updateObjectTransform(objectId, group, axis, input.valueAsNumber);
+        return;
+      }
+
+      const geometryKey = input.dataset.geometryKey;
+      if (this.#isGeometryKey(geometryKey)) {
+        actions.updateObjectGeometry(objectId, geometryKey, input.valueAsNumber);
+      }
+    }
+  }
+
+  #handleEditorFocusOut(event: FocusEvent): void {
+    const input = event.target;
     if (!(input instanceof HTMLInputElement)) return;
+    if (this.#materialLibrary.handleUiFocusOut(input) || !this.#model) return;
 
     const nameId = input.dataset.objectNameInput;
     if (nameId) {
-      actions.updateObjectName(nameId, input.value);
+      const object = this.#model.objects.find((item) => item.id === nameId);
+      if (object) input.value = object.name;
       return;
     }
 
     const objectId = input.dataset.objectId;
-    if (!objectId || !Number.isFinite(input.valueAsNumber)) return;
+    if (!objectId) return;
+    const object = this.#model.objects.find((item) => item.id === objectId);
+    if (!object) return;
 
     const group = input.dataset.transformGroup;
     const axis = input.dataset.axis;
     if (this.#isTransformGroup(group) && this.#isTransformAxis(axis)) {
-      actions.updateObjectTransform(
-        objectId,
-        group,
-        axis,
-        input.valueAsNumber,
-      );
+      input.value = formatEditorNumber(object.transform[group][axis]);
       return;
     }
 
     const geometryKey = input.dataset.geometryKey;
     if (this.#isGeometryKey(geometryKey)) {
-      actions.updateObjectGeometry(objectId, geometryKey, input.valueAsNumber);
+      const geometry = object.geometry as unknown as Record<
+        string,
+        number | string
+      >;
+      input.value = formatEditorNumber(Number(geometry[geometryKey]));
     }
   }
 
@@ -307,6 +483,7 @@ export class AppShell {
     if (
       event.defaultPrevented ||
       this.#manualDialog.open ||
+      this.#materialLibrary.isOpen ||
       this.#isEditingTarget(event.target)
     ) {
       return;
@@ -349,6 +526,10 @@ export class AppShell {
 
   #isGeometryType(value: string | undefined): value is GeometryModel["type"] {
     return value !== undefined && GEOMETRY_TYPES.has(value as GeometryModel["type"]);
+  }
+
+  #isMaterialPreset(value: string): value is MaterialPresetId {
+    return MATERIAL_PRESETS.has(value as MaterialPresetId);
   }
 
   #isTransformMode(value: string | undefined): value is TransformMode {
@@ -409,6 +590,9 @@ export class AppShell {
       const key = element.dataset.i18nAriaLabel as MessageKey | undefined;
       if (key) element.setAttribute("aria-label", translate(locale, key));
     }
+    this.#root
+      .querySelector<HTMLInputElement>("[data-material-search]")
+      ?.setAttribute("placeholder", translate(locale, "material.searchPlaceholder"));
     this.#renderLanguageButton();
     this.#renderThemeButton();
     this.#renderStatus();
@@ -479,7 +663,7 @@ export class AppShell {
         <header class="app-header">
           <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand-copy"><strong>RENDER VIEWER</strong><small data-i18n="brand.subtitle">パラメトリック3Dシーンツール</small></span></div>
           <div class="header-tools">
-            <div class="header-meta"><span class="phase-badge" data-i18n="header.phase">フェーズ 2</span><span class="header-divider" aria-hidden="true"></span><span class="scene-name" data-scene-name>Lighting Study 01</span></div>
+            <div class="header-meta"><span class="phase-badge" data-i18n="header.phase">フェーズ 3</span><span class="header-divider" aria-hidden="true"></span><span class="scene-name" data-scene-name>Lighting Study 01</span></div>
             <div class="header-actions" role="group" data-i18n-aria-label="header.controls" aria-label="表示と言語の設定">
               <button class="header-button" data-action="language" type="button"><i aria-hidden="true">文/A</i><span data-language-label>English</span></button>
               <button class="header-button" data-action="theme" type="button" aria-pressed="false"><i data-theme-icon aria-hidden="true">☀</i><span data-theme-label>ライト</span></button>
@@ -490,7 +674,7 @@ export class AppShell {
 
         <main class="workspace">
           <aside class="panel scene-panel" data-i18n-aria-label="scene.panelLabel">
-            <div class="panel-heading scene-heading"><div><span class="eyebrow" data-i18n="scene.eyebrow">シーンモデル</span><h1 data-i18n="scene.title">シーン</h1></div><span class="schema-badge">JSON v1</span></div>
+            <div class="panel-heading scene-heading"><div><span class="eyebrow" data-i18n="scene.eyebrow">シーンモデル</span><h1 data-i18n="scene.title">シーン</h1></div><span class="schema-badge">JSON v2</span></div>
             <details class="primitive-menu">
               <summary data-i18n-aria-label="scene.addObjectLabel"><i aria-hidden="true">＋</i><span data-i18n="scene.addObject">オブジェクト追加</span><b aria-hidden="true">⌄</b></summary>
               <div class="primitive-grid">
@@ -507,7 +691,7 @@ export class AppShell {
               <section class="tree-section"><div class="tree-group"><span data-i18n="scene.lights">ライト</span><b data-light-count>0</b></div><div data-light-list></div></section>
               <section class="tree-section"><div class="tree-group"><span data-i18n="scene.camera">カメラ</span><b>1</b></div><div class="tree-item tree-item-static" data-camera-item><span class="tree-icon camera-icon" aria-hidden="true"></span><span><strong data-i18n="scene.perspective">透視投影</strong><small>45° FOV</small></span></div></section>
             </nav>
-            <div class="model-note"><b>02</b><p><strong data-i18n="scene.modelNoteTitle">SceneModelが正本</strong><span data-i18n="scene.modelNoteBody">編集結果はモデルを経由して描画へ反映されます。</span></p></div>
+            <div class="model-note"><b>03</b><p><strong data-i18n="scene.modelNoteTitle">SceneModelが正本</strong><span data-i18n="scene.modelNoteBody">編集結果はモデルを経由して描画へ反映されます。</span></p></div>
           </aside>
 
           <section class="viewport-panel" data-i18n-aria-label="viewport.panelLabel">
@@ -529,17 +713,23 @@ export class AppShell {
         <dialog class="manual-dialog" data-manual-dialog aria-labelledby="manual-title">
           <div class="manual-header"><div><span class="eyebrow">RENDER VIEWER 3D</span><h2 id="manual-title" data-i18n="manual.title">簡易マニュアル</h2></div><form method="dialog"><button class="dialog-close" type="submit" value="close" data-i18n-aria-label="manual.closeLabel">×</button></form></div>
           <div class="manual-body">
-            <p class="manual-intro" data-i18n="manual.intro">オブジェクト編集と3Dビュー操作の要点をまとめています。</p>
+            <p class="manual-intro" data-i18n="manual.intro">オブジェクト、マテリアル、3Dビュー操作の要点をまとめています。</p>
             <section><h3><span>01</span><b data-i18n="manual.sceneTitle">オブジェクト操作</b></h3><ul><li data-i18n="manual.addPrimitive">「オブジェクト追加」から6種類の形状を追加できます。</li><li data-i18n="manual.selectObject">一覧または3Dビューでオブジェクトを選択します。</li><li data-i18n="manual.visibility">一覧右端で表示を切り替えます。</li></ul></section>
             <section><h3><span>02</span><b data-i18n="manual.editTitle">インスペクター</b></h3><ul><li data-i18n="manual.editName">名前を編集すると一覧にも反映されます。</li><li data-i18n="manual.editTransform">位置・回転・拡大率をXYZごとに編集できます。</li><li data-i18n="manual.editGeometry">形状固有の寸法や分割数を編集できます。</li><li data-i18n="manual.duplicateDelete">複製と削除は下部から実行します。</li></ul></section>
-            <section><h3><span>03</span><b data-i18n="manual.shortcutsTitle">編集ショートカット</b></h3><ul><li data-i18n="manual.shortcutModes">W：移動、E：回転、R：拡大縮小。</li><li data-i18n="manual.shortcutDuplicate">Ctrl/Cmd + D：複製。</li><li data-i18n="manual.shortcutDelete">Delete / Backspace：削除。</li><li data-i18n="manual.shortcutInput">入力・ボタン操作中は無効です。</li></ul></section>
-            <section><h3><span>04</span><b data-i18n="manual.navigationTitle">カメラ操作</b></h3><ul><li data-i18n="manual.rotate">左ドラッグ：回転。</li><li data-i18n="manual.pan">右ドラッグ：移動。</li><li data-i18n="manual.zoom">ホイール：ズーム。</li><li data-i18n="manual.reset">視点リセット：初期位置へ戻します。</li></ul></section>
-            <section><h3><span>05</span><b data-i18n="manual.displayTitle">表示設定</b></h3><ul><li data-i18n="manual.grid">グリッドを切り替えます。</li><li data-i18n="manual.axes">XYZ軸を切り替えます。</li><li data-i18n="manual.theme">ライト・ダークテーマを切り替えます。</li></ul></section>
-            <section><h3><span>06</span><b data-i18n="manual.languageTitle">言語と閉じ方</b></h3><ul><li data-i18n="manual.language">English / 日本語で言語を切り替えます。</li><li data-i18n="manual.escape">Esc、閉じる、またはダイアログ外で閉じます。</li></ul></section>
+            <section><h3><span>03</span><b data-i18n="manual.materialTitle">マテリアル</b></h3><ul><li data-i18n="manual.materialOpen">オブジェクトを選択し、インスペクターからライブラリを開きます。</li><li data-i18n="manual.materialSearch">名前・タグ・POV-Rayキーワードで検索できます。</li><li data-i18n="manual.materialAssign">マテリアルを選択中のオブジェクトへ割り当てます。</li><li data-i18n="manual.materialShared">共有変更は使用中の全オブジェクトへ反映されます。</li><li data-i18n="manual.materialStatus">対応状況でWebGLプレビューとの関係を確認できます。</li><li data-i18n="manual.materialAdvanced">詳細タブではPOV-Ray材料特性を一覧できます。</li><li data-i18n="manual.materialDisclaimer">WebGL表示はPOV-Rayレンダリングそのものではありません。</li></ul></section>
+            <section><h3><span>04</span><b data-i18n="manual.shortcutsTitle">編集ショートカット</b></h3><ul><li data-i18n="manual.shortcutModes">W：移動、E：回転、R：拡大縮小。</li><li data-i18n="manual.shortcutDuplicate">Ctrl/Cmd + D：複製。</li><li data-i18n="manual.shortcutDelete">Delete / Backspace：削除。</li><li data-i18n="manual.shortcutInput">入力・ボタン操作中は無効です。</li></ul></section>
+            <section><h3><span>05</span><b data-i18n="manual.navigationTitle">カメラ操作</b></h3><ul><li data-i18n="manual.rotate">左ドラッグ：回転。</li><li data-i18n="manual.pan">右ドラッグ：移動。</li><li data-i18n="manual.zoom">ホイール：ズーム。</li><li data-i18n="manual.reset">視点リセット：初期位置へ戻します。</li></ul></section>
+            <section><h3><span>06</span><b data-i18n="manual.displayTitle">表示設定</b></h3><ul><li data-i18n="manual.grid">グリッドを切り替えます。</li><li data-i18n="manual.axes">XYZ軸を切り替えます。</li><li data-i18n="manual.theme">ライト・ダークテーマを切り替えます。</li></ul></section>
+            <section><h3><span>07</span><b data-i18n="manual.languageTitle">言語と閉じ方</b></h3><ul><li data-i18n="manual.language">English / 日本語で言語を切り替えます。</li><li data-i18n="manual.escape">Esc、閉じる、またはダイアログ外で閉じます。</li></ul></section>
           </div>
           <form method="dialog" class="manual-footer"><button type="submit" value="close" data-i18n="manual.close">閉じる</button></form>
         </dialog>
       </div>
     `;
   }
+}
+
+function formatEditorNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return String(Number(value.toFixed(4)));
 }

@@ -14,7 +14,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test tests/refactoring.test.mjs tests/ui-settings.test.mjs tests/editor-store.test.mjs tests/scene-object-commands.test.mjs tests/geometry-factory.test.mjs tests/scene-interaction-adapter.test.mjs",
+    "test": "node --test tests/material-model.test.mjs tests/material-library-ui.test.mjs tests/material-capability-ui.test.mjs tests/material-basic-editor.test.mjs tests/material-detail-state.test.mjs tests/material-runtime.test.mjs tests/refactoring.test.mjs tests/ui-settings.test.mjs tests/editor-store.test.mjs tests/scene-object-commands.test.mjs tests/geometry-factory.test.mjs tests/scene-interaction-adapter.test.mjs",
     "prebuild": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",

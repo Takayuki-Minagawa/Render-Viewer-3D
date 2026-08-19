@@ -1,6 +1,8 @@
 import type { EditorState, TransformMode } from "../app/editor-store";
+import type { MaterialDefinitionModel } from "../model/material/material-model";
 import type { GeometryModel, SceneSnapshot } from "../model/scene-model";
 import { translate, type AppLocale, type MessageKey } from "./i18n";
+import { getMaterialSupportStatus } from "./material-library";
 
 export type TransformGroup = "position" | "rotationDegrees" | "scale";
 export type TransformAxis = "x" | "y" | "z";
@@ -18,6 +20,7 @@ export type GeometryNumericKey =
   | "tubularSegments";
 
 type ObjectModel = SceneSnapshot["objects"][number];
+type MaterialModel = SceneSnapshot["materials"][number];
 
 interface GeometryField {
   readonly key: GeometryNumericKey;
@@ -51,12 +54,7 @@ const GEOMETRY_FIELDS: Record<GeometryModel["type"], readonly GeometryField[]> =
     },
   ],
   cylinder: [
-    {
-      key: "radiusTop",
-      label: "inspector.radiusTop",
-      step: 0.1,
-      min: 0.01,
-    },
+    { key: "radiusTop", label: "inspector.radiusTop", step: 0.1, min: 0.01 },
     {
       key: "radiusBottom",
       label: "inspector.radiusBottom",
@@ -89,12 +87,7 @@ const GEOMETRY_FIELDS: Record<GeometryModel["type"], readonly GeometryField[]> =
   ],
   torus: [
     { key: "radius", label: "inspector.radius", step: 0.1, min: 0.01 },
-    {
-      key: "tubeRadius",
-      label: "inspector.tubeRadius",
-      step: 0.05,
-      min: 0.01,
-    },
+    { key: "tubeRadius", label: "inspector.tubeRadius", step: 0.05, min: 0.01 },
     {
       key: "radialSegments",
       label: "inspector.radialSegments",
@@ -127,6 +120,12 @@ const TRANSFORM_LABELS: Record<TransformMode, MessageKey> = {
   scale: "inspector.modeScale",
 };
 
+const MATERIAL_STATUS_LABELS = {
+  direct: "material.supportDirect",
+  approximate: "material.supportApproximate",
+  stored: "material.supportStored",
+} as const satisfies Record<string, MessageKey>;
+
 export class SceneEditorView {
   readonly #root: HTMLElement;
   readonly #objectList: HTMLElement;
@@ -139,6 +138,7 @@ export class SceneEditorView {
   readonly #inspectorBadge: HTMLElement;
   #renderedObjectId: string | null | undefined;
   #renderedGeometryType: GeometryModel["type"] | null = null;
+  #renderedMaterialId: string | null = null;
   #renderedLocale: AppLocale | undefined;
 
   constructor(root: HTMLElement) {
@@ -161,6 +161,9 @@ export class SceneEditorView {
     const selectedObject = editorState.selectedObjectId
       ? model.objects.find((item) => item.id === editorState.selectedObjectId)
       : undefined;
+    const selectedMaterial = selectedObject
+      ? model.materials.find((material) => material.id === selectedObject.materialId)
+      : undefined;
 
     this.#objectCount.textContent = String(model.objects.length);
     this.#lightCount.textContent = String(model.lights.length);
@@ -169,18 +172,35 @@ export class SceneEditorView {
     this.#renderCamera(model, locale);
 
     const geometryType = selectedObject?.geometry.type ?? null;
+    const materialId = selectedMaterial?.id ?? null;
     if (
       this.#renderedObjectId !== (selectedObject?.id ?? null) ||
       this.#renderedGeometryType !== geometryType ||
+      this.#renderedMaterialId !== materialId ||
       this.#renderedLocale !== locale
     ) {
-      this.#buildInspector(selectedObject, editorState, locale);
+      this.#buildInspector(
+        selectedObject,
+        selectedMaterial,
+        model.objects,
+        editorState,
+        locale,
+      );
       this.#renderedObjectId = selectedObject?.id ?? null;
       this.#renderedGeometryType = geometryType;
+      this.#renderedMaterialId = materialId;
       this.#renderedLocale = locale;
     }
 
-    if (selectedObject) this.#syncInspector(selectedObject, editorState);
+    if (selectedObject) {
+      this.#syncInspector(
+        selectedObject,
+        selectedMaterial,
+        model.objects,
+        editorState,
+        locale,
+      );
+    }
   }
 
   #renderObjects(
@@ -195,7 +215,6 @@ export class SceneEditorView {
       empty.textContent = translate(locale, "scene.noObjects");
       fragment.append(empty);
     }
-
     for (const object of objects) {
       const row = document.createElement("div");
       row.className = "tree-item";
@@ -211,7 +230,6 @@ export class SceneEditorView {
         "aria-label",
         `${translate(locale, "scene.selectObject")}: ${object.name}`,
       );
-
       const icon = document.createElement("span");
       icon.className = `tree-icon ${this.#geometryIcon(object.geometry.type)}`;
       icon.setAttribute("aria-hidden", "true");
@@ -292,6 +310,8 @@ export class SceneEditorView {
 
   #buildInspector(
     object: ObjectModel | undefined,
+    material: MaterialModel | undefined,
+    objects: SceneSnapshot["objects"],
     editorState: EditorState,
     locale: AppLocale,
   ): void {
@@ -322,7 +342,12 @@ export class SceneEditorView {
       this.#createIdentitySection(object, locale),
       this.#createTransformSection(object, editorState, locale),
       this.#createGeometrySection(object, locale),
-      this.#createMaterialSection(object, locale),
+      this.#createMaterialSection(
+        object,
+        material,
+        objects.filter((candidate) => candidate.materialId === object.materialId).length,
+        locale,
+      ),
       this.#createActionSection(object, locale),
     );
     this.#inspectorBody.replaceChildren(fragment);
@@ -332,14 +357,15 @@ export class SceneEditorView {
     const section = this.#createSection("inspector.object", locale);
     const label = document.createElement("label");
     label.className = "field-label";
-    label.textContent = translate(locale, "inspector.name");
+    const text = document.createElement("span");
+    text.textContent = translate(locale, "inspector.name");
     const input = document.createElement("input");
     input.type = "text";
     input.autocomplete = "off";
     input.maxLength = 80;
     input.dataset.objectNameInput = object.id;
     input.value = object.name;
-    label.append(input);
+    label.append(text, input);
     section.append(label);
     return section;
   }
@@ -375,13 +401,7 @@ export class SceneEditorView {
     }
     section.append(modes);
     section.append(
-      this.#createVectorInputs(
-        object,
-        "position",
-        "inspector.position",
-        0.1,
-        locale,
-      ),
+      this.#createVectorInputs(object, "position", "inspector.position", 0.1, locale),
       this.#createVectorInputs(
         object,
         "rotationDegrees",
@@ -389,13 +409,7 @@ export class SceneEditorView {
         1,
         locale,
       ),
-      this.#createVectorInputs(
-        object,
-        "scale",
-        "inspector.scale",
-        0.1,
-        locale,
-      ),
+      this.#createVectorInputs(object, "scale", "inspector.scale", 0.1, locale),
     );
     return section;
   }
@@ -415,8 +429,8 @@ export class SceneEditorView {
     grid.className = "vector-input-grid";
     for (const axis of ["x", "y", "z"] as const) {
       const label = document.createElement("label");
-      const axisLabel = document.createElement("span");
-      axisLabel.textContent = axis.toUpperCase();
+      const text = document.createElement("span");
+      text.textContent = axis.toUpperCase();
       const input = document.createElement("input");
       input.type = "number";
       input.step = String(step);
@@ -424,7 +438,7 @@ export class SceneEditorView {
       input.dataset.transformGroup = group;
       input.dataset.axis = axis;
       input.value = this.#formatNumber(object.transform[group][axis]);
-      label.append(axisLabel, input);
+      label.append(text, input);
       grid.append(label);
     }
     fieldset.append(legend, grid);
@@ -458,25 +472,44 @@ export class SceneEditorView {
     return section;
   }
 
-  #createMaterialSection(object: ObjectModel, locale: AppLocale): HTMLElement {
+  #createMaterialSection(
+    object: ObjectModel,
+    material: MaterialModel | undefined,
+    usageCount: number,
+    locale: AppLocale,
+  ): HTMLElement {
     const section = this.#createSection("inspector.material", locale);
-    const row = document.createElement("div");
-    row.className = "swatch-row";
-    const swatch = document.createElement("i");
-    swatch.style.backgroundColor = object.material.color;
+    const card = document.createElement("div");
+    card.className = "material-inspector-card";
+    const summary = document.createElement("div");
+    summary.className = "material-inspector-summary";
+    const swatch = document.createElement("span");
+    swatch.className = "material-swatch";
+    swatch.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("i");
+    fill.dataset.inspectorMaterialSwatch = "";
+    fill.style.backgroundColor = material?.preview.baseColor ?? "#000000";
+    swatch.append(fill);
     const copy = document.createElement("span");
-    const color = document.createElement("strong");
-    color.dataset.materialColor = "";
-    color.textContent = object.material.color.toUpperCase();
+    copy.className = "material-inspector-copy";
+    const name = document.createElement("strong");
+    name.dataset.inspectorMaterialName = "";
+    name.textContent = material?.name ?? object.materialId;
     const meta = document.createElement("small");
-    meta.textContent = `${translate(locale, "inspector.roughness")} ${this.#formatNumber(
-      object.material.roughness,
-    )} · ${translate(locale, "inspector.metalness")} ${this.#formatNumber(
-      object.material.metalness,
-    )}`;
-    copy.append(color, meta);
-    row.append(swatch, copy);
-    section.append(row);
+    meta.dataset.inspectorMaterialMeta = "";
+    const status = material ? getMaterialSupportStatus(material) : "stored";
+    meta.textContent = `${translate(locale, MATERIAL_STATUS_LABELS[status])} · ${translate(
+      locale,
+      "material.usedBy",
+    )} ${usageCount}`;
+    copy.append(name, meta);
+    summary.append(swatch, copy);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.dataset.openMaterialLibrary = material?.id ?? object.materialId;
+    open.textContent = translate(locale, "inspector.materialOpen");
+    card.append(summary, open);
+    section.append(card);
     return section;
   }
 
@@ -517,7 +550,13 @@ export class SceneEditorView {
     return section;
   }
 
-  #syncInspector(object: ObjectModel, editorState: EditorState): void {
+  #syncInspector(
+    object: ObjectModel,
+    material: MaterialModel | undefined,
+    objects: SceneSnapshot["objects"],
+    editorState: EditorState,
+    locale: AppLocale,
+  ): void {
     this.#inspectorTitle.textContent = object.name;
     const nameInput = this.#inspectorBody.querySelector<HTMLInputElement>(
       "[data-object-name-input]",
@@ -548,12 +587,27 @@ export class SceneEditorView {
       button.setAttribute("aria-pressed", String(active));
     }
 
-    const swatch = this.#inspectorBody.querySelector<HTMLElement>(".swatch-row > i");
-    if (swatch) swatch.style.backgroundColor = object.material.color;
-    const color = this.#inspectorBody.querySelector<HTMLElement>(
-      "[data-material-color]",
+    const swatch = this.#inspectorBody.querySelector<HTMLElement>(
+      "[data-inspector-material-swatch]",
     );
-    if (color) color.textContent = object.material.color.toUpperCase();
+    if (swatch && material) swatch.style.backgroundColor = material.preview.baseColor;
+    const name = this.#inspectorBody.querySelector<HTMLElement>(
+      "[data-inspector-material-name]",
+    );
+    if (name) name.textContent = material?.name ?? object.materialId;
+    const meta = this.#inspectorBody.querySelector<HTMLElement>(
+      "[data-inspector-material-meta]",
+    );
+    if (meta) {
+      const status = material ? getMaterialSupportStatus(material) : "stored";
+      const usageCount = objects.filter(
+        (candidate) => candidate.materialId === object.materialId,
+      ).length;
+      meta.textContent = `${translate(locale, MATERIAL_STATUS_LABELS[status])} · ${translate(
+        locale,
+        "material.usedBy",
+      )} ${usageCount}`;
+    }
   }
 
   #syncInput(input: HTMLInputElement, value: string): void {
@@ -561,20 +615,15 @@ export class SceneEditorView {
   }
 
   #geometryIcon(type: GeometryModel["type"]): string {
-    switch (type) {
-      case "box":
-        return "cube-icon";
-      case "sphere":
-        return "sphere-icon";
-      case "cylinder":
-        return "cylinder-icon";
-      case "cone":
-        return "cone-icon";
-      case "plane":
-        return "plane-icon";
-      case "torus":
-        return "torus-icon";
-    }
+    const icons: Record<GeometryModel["type"], string> = {
+      box: "cube-icon",
+      sphere: "sphere-icon",
+      cylinder: "cylinder-icon",
+      cone: "cone-icon",
+      plane: "plane-icon",
+      torus: "torus-icon",
+    };
+    return icons[type];
   }
 
   #formatNumber(value: number): string {
@@ -598,3 +647,5 @@ export class SceneEditorView {
     return element;
   }
 }
+
+export type { MaterialDefinitionModel };

@@ -35,9 +35,9 @@
   --text: #172131;
   --text-muted: #536276;
   --text-faint: #586679;
-  --accent: #356ee8;
-  --accent-soft: rgba(53, 110, 232, 0.11);
-  --accent-border: rgba(53, 110, 232, 0.42);
+  --accent: #2656b4;
+  --accent-soft: rgba(38, 86, 180, 0.11);
+  --accent-border: rgba(38, 86, 180, 0.42);
   --success: #11835a;
   --danger: #cc3148;
   --danger-soft: rgba(204, 49, 72, 0.09);

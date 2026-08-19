@@ -6,6 +6,12 @@ import type {
   TransformModel,
   Vec3Model,
 } from "./scene-model";
+import {
+  createUniqueMaterialId,
+  duplicateMaterial,
+  findMaterial,
+} from "./material/material-commands";
+import { createMaterialDefinition } from "./material/material-presets";
 
 export const SCENE_OBJECT_GEOMETRY_TYPES = [
   "box",
@@ -92,9 +98,14 @@ export function createDefaultSceneObject(
   type: GeometryType,
   id: string,
   name = GEOMETRY_LABELS[type],
+  materialId = `${id.trim()}-material`,
 ): SceneObjectModel {
   const normalizedId = id.trim();
   if (!normalizedId) throw new Error("Scene object id must not be empty.");
+  const normalizedMaterialId = materialId.trim();
+  if (!normalizedMaterialId) {
+    throw new Error("Scene object material id must not be empty.");
+  }
 
   const geometry = createDefaultGeometry(type);
   return {
@@ -103,11 +114,7 @@ export function createDefaultSceneObject(
     visible: true,
     transform: createDefaultTransform(geometry),
     geometry,
-    material: {
-      color: "#5f8cff",
-      metalness: 0.08,
-      roughness: 0.32,
-    },
+    materialId: normalizedMaterialId,
     castShadow: type !== "plane",
     receiveShadow: true,
   };
@@ -118,11 +125,23 @@ export function addSceneObject(
   type: GeometryType,
 ): SceneObjectModel {
   const identity = createUniqueObjectIdentity(draft, type);
+  const objectName =
+    `${GEOMETRY_LABELS[type]} ${formatOrdinal(identity.ordinal)}`;
+  const materialId = createUniqueMaterialId(
+    draft,
+    `${identity.id}-material`,
+  );
+  const material = createMaterialDefinition(
+    materialId,
+    `${objectName} Material`,
+  );
   const object = createDefaultSceneObject(
     type,
     identity.id,
-    `${GEOMETRY_LABELS[type]} ${formatOrdinal(identity.ordinal)}`,
+    objectName,
+    material.id,
   );
+  draft.materials.push(material);
   draft.objects.push(object);
   return object;
 }
@@ -139,6 +158,21 @@ export function duplicateSceneObject(
   const duplicate = structuredClone(source);
   duplicate.id = identity.id;
   duplicate.name = createUniqueCopyName(draft, source.name);
+
+  const sourceMaterial = findMaterial(draft, source.materialId);
+  const duplicatedMaterial = sourceMaterial
+    ? duplicateMaterial(draft, sourceMaterial.id)
+    : createMaterialDefinition(
+        createUniqueMaterialId(draft, `${duplicate.id}-material`),
+        `${duplicate.name.slice(0, 71)} Material`,
+      );
+  if (!duplicatedMaterial) {
+    throw new Error("Unable to duplicate the source material.");
+  }
+  if (!sourceMaterial) draft.materials.push(duplicatedMaterial);
+  duplicatedMaterial.name = `${duplicate.name.slice(0, 71)} Material`;
+  duplicate.materialId = duplicatedMaterial.id;
+
   draft.objects.splice(sourceIndex + 1, 0, duplicate);
   return duplicate;
 }

@@ -1,3 +1,7 @@
+import type { MaterialDefinitionModel } from "./material/material-model";
+
+export type { MaterialDefinitionModel } from "./material/material-model";
+
 export interface Vec3Model {
   x: number;
   y: number;
@@ -8,12 +12,6 @@ export interface TransformModel {
   position: Vec3Model;
   rotationDegrees: Vec3Model;
   scale: Vec3Model;
-}
-
-export interface MaterialModel {
-  color: string;
-  metalness: number;
-  roughness: number;
 }
 
 export interface BoxGeometryModel {
@@ -75,7 +73,7 @@ export interface SceneObjectModel {
   visible: boolean;
   transform: TransformModel;
   geometry: GeometryModel;
-  material: MaterialModel;
+  materialId: string;
   castShadow: boolean;
   receiveShadow: boolean;
 }
@@ -112,7 +110,7 @@ export interface CameraModel {
 }
 
 export interface SceneModel {
-  schemaVersion: 1;
+  schemaVersion: 2;
   name: string;
   backgroundColor: string;
   shadowsEnabled: boolean;
@@ -121,6 +119,7 @@ export interface SceneModel {
     axesVisible: boolean;
   };
   camera: CameraModel;
+  materials: MaterialDefinitionModel[];
   objects: SceneObjectModel[];
   lights: LightModel[];
 }

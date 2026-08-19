@@ -7,6 +7,7 @@ let server;
 let SceneGraphAdapter;
 let SceneInteractionAdapter;
 let createDefaultSceneObject;
+let createMaterialDefinition;
 
 before(async () => {
   server = await createServer({
@@ -23,6 +24,9 @@ before(async () => {
   ({ createDefaultSceneObject } = await server.ssrLoadModule(
     "/src/model/scene-object-commands.ts",
   ));
+  ({ createMaterialDefinition } = await server.ssrLoadModule(
+    "/src/model/material/material-presets.ts",
+  ));
 });
 
 after(async () => {
@@ -32,7 +36,7 @@ after(async () => {
 describe("SceneInteractionAdapter transform transactions", () => {
   it("preserves an in-flight transform across model reconcile until commit", () => {
     const harness = createHarness();
-    const { controls, graph, interaction, objects, orbitControls } = harness;
+    const { controls, graph, interaction, materials, objects, orbitControls } = harness;
 
     controls.beginDrag();
     controls.changeObject((object) => {
@@ -43,7 +47,7 @@ describe("SceneInteractionAdapter transform transactions", () => {
 
     assert.equal(objects[0].transform.position.x, 0);
     objects[0].name = "Externally renamed";
-    graph.applyModel(objects, []);
+    graph.applyModel(objects, [], materials);
     interaction.refreshSelection();
 
     const mesh = graph.getObjectById(objects[0].id);
@@ -67,7 +71,7 @@ describe("SceneInteractionAdapter transform transactions", () => {
     assert.equal(orbitControls.enabled, true);
 
     objects.splice(0, 1);
-    graph.applyModel(objects, []);
+    graph.applyModel(objects, [], materials);
     interaction.refreshSelection();
     assert.equal(graph.getObjectById("shape-box"), undefined);
     disposeHarness(harness);
@@ -75,8 +79,15 @@ describe("SceneInteractionAdapter transform transactions", () => {
 
   it("retains a hidden object's pending transform until pointerup commits it", () => {
     const harness = createHarness();
-    const { canvas, controls, graph, interaction, objects, orbitControls } =
-      harness;
+    const {
+      canvas,
+      controls,
+      graph,
+      interaction,
+      materials,
+      objects,
+      orbitControls,
+    } = harness;
 
     canvas.dispatchEvent(pointerEvent("pointerdown"));
     controls.beginDrag();
@@ -84,7 +95,7 @@ describe("SceneInteractionAdapter transform transactions", () => {
       object.position.y = 6.5;
     });
     objects[0].visible = false;
-    graph.applyModel(objects, []);
+    graph.applyModel(objects, [], materials);
     interaction.refreshSelection();
 
     assert.equal(harness.commits.length, 0);
@@ -112,7 +123,7 @@ describe("SceneInteractionAdapter transform transactions", () => {
     const harness = createHarness((context) => {
       context.canvas.addEventListener("pointercancel", () => {
         order.push("external-model");
-        context.graph.applyModel(context.objects, []);
+        context.graph.applyModel(context.objects, [], context.materials);
         context.interaction.refreshSelection();
       });
     }, order);
@@ -220,6 +231,9 @@ function createHarness(beforeCreate, commitOrder) {
   const scene = new THREE.Scene();
   const graph = new SceneGraphAdapter(scene);
   const objects = [createDefaultSceneObject("box", "shape-box")];
+  const materials = [
+    createMaterialDefinition(objects[0].materialId, "Shape Material"),
+  ];
   const canvas = new FakeCanvas();
   const controls = new FakeTransformControls();
   const orbitControls = { enabled: true };
@@ -229,10 +243,11 @@ function createHarness(beforeCreate, commitOrder) {
     controls,
     graph,
     interaction: undefined,
+    materials,
     objects,
   };
 
-  graph.applyModel(objects, []);
+  graph.applyModel(objects, [], materials);
   beforeCreate?.(context);
   context.interaction = new SceneInteractionAdapter(
     scene,
@@ -247,7 +262,7 @@ function createHarness(beforeCreate, commitOrder) {
         commits.push({ objectId, transform: structuredClone(transform) });
         const object = objects.find((candidate) => candidate.id === objectId);
         if (object) object.transform = structuredClone(transform);
-        graph.applyModel(objects, []);
+        graph.applyModel(objects, [], materials);
         context.interaction.refreshSelection();
       },
       createTransformControls: () => controls,

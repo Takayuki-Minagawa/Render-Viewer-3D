@@ -87,6 +87,14 @@ describe("translations", () => {
     assert.equal(translate("en", "manual.title"), "Quick guide");
     assert.equal(translate("ja", "theme.light"), "ライト");
     assert.equal(translate("en", "theme.light"), "LIGHT");
+    assert.doesNotMatch(
+      translate("ja", "manual.materialSearch"),
+      /対応状況/,
+    );
+    assert.doesNotMatch(
+      translate("en", "manual.materialSearch"),
+      /support status/i,
+    );
   });
 });
 

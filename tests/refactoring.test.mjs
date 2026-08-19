@@ -39,7 +39,7 @@ describe("SceneStore", () => {
     assert.ok(Object.isFrozen(snapshot));
     assert.ok(Object.isFrozen(snapshot.camera.position));
     assert.ok(Object.isFrozen(snapshot.objects));
-    assert.ok(Object.isFrozen(snapshot.objects[0].material));
+    assert.ok(Object.isFrozen(snapshot.materials[0].preview));
     assert.throws(() => {
       snapshot.camera.position.x = 99;
     }, TypeError);
@@ -76,23 +76,24 @@ describe("SceneGraphAdapter", () => {
     const adapter = new SceneGraphAdapter(scene);
     const model = createDefaultSceneModel();
 
-    adapter.applyModel(model.objects, model.lights);
+    adapter.applyModel(model.objects, model.lights, model.materials);
 
     const initialMeshes = findMeshes(scene);
-    assert.equal(initialMeshes.length, 2);
+    assert.equal(initialMeshes.length, 3);
     assert.equal(findLights(scene).length, 2);
 
     const box = findMesh(scene, "box-01");
     const ground = findMesh(scene, "ground-01");
     assert.equal(box.name, "Box 01");
     assert.deepEqual(box.position.toArray(), [0, 1, 0]);
-    assert.ok(
-      nearlyEqual(box.rotation.y, THREE.MathUtils.degToRad(-18)),
-    );
+    assert.ok(nearlyEqual(box.rotation.y, THREE.MathUtils.degToRad(-18)));
     assert.deepEqual(box.scale.toArray(), [1, 1, 1]);
     assert.equal(box.castShadow, true);
     assert.equal(box.receiveShadow, true);
-    assert.equal(box.material.color.getHexString(THREE.SRGBColorSpace), "5f8cff");
+    assertMaterialColor(
+      box.material,
+      findMaterial(model, model.objects[0].materialId),
+    );
     assert.equal(box.material.metalness, 0.08);
     assert.equal(box.material.roughness, 0.32);
     assert.deepEqual(ground.position.toArray(), [0, -0.02, 0]);
@@ -127,7 +128,7 @@ describe("SceneGraphAdapter", () => {
       groundMaterialDisposed = true;
     };
 
-    adapter.applyModel(model.objects, model.lights);
+    adapter.applyModel(model.objects, model.lights, model.materials);
     assert.equal(findMesh(scene, "box-01").geometry, originalBoxGeometry);
 
     const next = structuredClone(model);
@@ -137,11 +138,13 @@ describe("SceneGraphAdapter", () => {
     next.objects[0].transform.position = { x: 2, y: 3, z: 4 };
     next.objects[0].transform.rotationDegrees = { x: 10, y: 20, z: 30 };
     next.objects[0].transform.scale = { x: 1.5, y: 2, z: 0.5 };
-    next.objects[0].material = {
-      color: "#ff8844",
+    const nextBoxMaterial = findMaterial(next, next.objects[0].materialId);
+    Object.assign(nextBoxMaterial.preview, {
+      baseColor: "#ff8844",
+      diffuse: 1,
       metalness: 0.4,
       roughness: 0.6,
-    };
+    });
     next.objects[0].castShadow = false;
     next.objects[0].receiveShadow = false;
     next.lights[0].color = "#88aaff";
@@ -151,35 +154,26 @@ describe("SceneGraphAdapter", () => {
     next.lights[1].position = { x: 7, y: 6, z: 5 };
     next.lights[1].target = { x: 1, y: 2, z: 3 };
     next.lights[1].castShadow = false;
-    next.objects.splice(1, 1);
+    next.objects = next.objects.filter((object) => object.id === "box-01");
     next.objects.push({
       ...structuredClone(next.objects[0]),
       id: "box-02",
       name: "Box 02",
     });
-    adapter.applyModel(next.objects, next.lights);
+    adapter.applyModel(next.objects, next.lights, next.materials);
 
     assert.notEqual(findMesh(scene, "box-01").geometry, originalBoxGeometry);
     const updatedBox = findMesh(scene, "box-01");
     assert.equal(updatedBox.name, "Updated Box");
     assert.equal(updatedBox.visible, false);
     assert.deepEqual(updatedBox.position.toArray(), [2, 3, 4]);
-    assert.ok(
-      nearlyEqual(updatedBox.rotation.x, THREE.MathUtils.degToRad(10)),
-    );
-    assert.ok(
-      nearlyEqual(updatedBox.rotation.y, THREE.MathUtils.degToRad(20)),
-    );
-    assert.ok(
-      nearlyEqual(updatedBox.rotation.z, THREE.MathUtils.degToRad(30)),
-    );
+    assert.ok(nearlyEqual(updatedBox.rotation.x, THREE.MathUtils.degToRad(10)));
+    assert.ok(nearlyEqual(updatedBox.rotation.y, THREE.MathUtils.degToRad(20)));
+    assert.ok(nearlyEqual(updatedBox.rotation.z, THREE.MathUtils.degToRad(30)));
     assert.deepEqual(updatedBox.scale.toArray(), [1.5, 2, 0.5]);
     assert.equal(updatedBox.castShadow, false);
     assert.equal(updatedBox.receiveShadow, false);
-    assert.equal(
-      updatedBox.material.color.getHexString(THREE.SRGBColorSpace),
-      "ff8844",
-    );
+    assertMaterialColor(updatedBox.material, nextBoxMaterial);
     assert.equal(updatedBox.material.metalness, 0.4);
     assert.equal(updatedBox.material.roughness, 0.6);
     const updatedAmbient = findLight(scene, THREE.AmbientLight, "Ambient Light");
@@ -209,16 +203,22 @@ describe("SceneGraphAdapter", () => {
     );
     assert.equal(boxGeometryDisposed, true);
     assert.equal(groundGeometryDisposed, true);
-    assert.equal(groundMaterialDisposed, true);
+    assert.equal(groundMaterialDisposed, false);
 
     const duplicate = structuredClone(next);
     duplicate.objects.push(structuredClone(duplicate.objects[0]));
     assert.throws(
-      () => adapter.applyModel(duplicate.objects, duplicate.lights),
+      () =>
+        adapter.applyModel(
+          duplicate.objects,
+          duplicate.lights,
+          duplicate.materials,
+        ),
       /Duplicate object id in SceneModel: box-01/,
     );
 
     adapter.dispose();
+    assert.equal(groundMaterialDisposed, true);
     assert.equal(findMeshes(scene).length, 0);
     assert.equal(findLights(scene).length, 0);
   });
@@ -227,7 +227,7 @@ describe("SceneGraphAdapter", () => {
     const scene = new THREE.Scene();
     const adapter = new SceneGraphAdapter(scene);
     const model = createDefaultSceneModel();
-    adapter.applyModel(model.objects, model.lights);
+    adapter.applyModel(model.objects, model.lights, model.materials);
     const initialAmbient = scene.children.find(
       (child) => child instanceof THREE.AmbientLight,
     );
@@ -245,7 +245,7 @@ describe("SceneGraphAdapter", () => {
       target: { x: 0, y: 0, z: 0 },
       castShadow: false,
     };
-    adapter.applyModel(next.objects, next.lights);
+    adapter.applyModel(next.objects, next.lights, next.materials);
 
     assert.ok(!scene.children.includes(initialAmbient));
     assert.equal(
@@ -281,6 +281,19 @@ function findLight(scene, LightType, name) {
   );
   assert.ok(light, `Expected light ${name}`);
   return light;
+}
+
+function findMaterial(model, materialId) {
+  const material = model.materials.find((candidate) => candidate.id === materialId);
+  assert.ok(material, `Expected material ${materialId}`);
+  return material;
+}
+
+function assertMaterialColor(actual, definition) {
+  const expected = new THREE.Color(definition.preview.baseColor);
+  assert.ok(nearlyEqual(actual.color.r, expected.r));
+  assert.ok(nearlyEqual(actual.color.g, expected.g));
+  assert.ok(nearlyEqual(actual.color.b, expected.b));
 }
 
 function nearlyEqual(actual, expected) {

@@ -1,3 +1,4 @@
+import type { ImportedSceneModel } from "./imported-scene-model";
 import type { MaterialDefinitionModel } from "./material/material-model";
 
 export type { MaterialDefinitionModel } from "./material/material-model";
@@ -119,6 +120,7 @@ export interface SceneModel {
     axesVisible: boolean;
   };
   camera: CameraModel;
+  imports: ImportedSceneModel[];
   materials: MaterialDefinitionModel[];
   objects: SceneObjectModel[];
   lights: LightModel[];

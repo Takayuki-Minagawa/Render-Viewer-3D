@@ -1,0 +1,205 @@
+import * as THREE from "three";
+
+export type ImportedMesh = THREE.Mesh<
+  THREE.BufferGeometry,
+  THREE.Material | THREE.Material[]
+>;
+
+type OriginalMeshMaterial = THREE.Material | THREE.Material[];
+
+export class ImportedAssetRuntime {
+  readonly assetId: string;
+  readonly root: THREE.Group;
+  readonly sourceRoot: THREE.Object3D;
+  readonly #originalMeshMaterials = new Map<
+    ImportedMesh,
+    OriginalMeshMaterial
+  >();
+  readonly #ownedGeometries = new Set<THREE.BufferGeometry>();
+  readonly #ownedMaterials = new Set<THREE.Material>();
+  #disposed = false;
+
+  constructor(assetId: string, sourceRoot: THREE.Object3D) {
+    this.assetId = assetId;
+    this.sourceRoot = sourceRoot;
+    this.root = new THREE.Group();
+    this.root.name = sourceRoot.name;
+    this.root.userData.importedAssetId = assetId;
+    this.#captureOwnedResources();
+    this.root.add(sourceRoot);
+  }
+
+  forEachMesh(visitor: (mesh: ImportedMesh) => void): void {
+    for (const mesh of this.#originalMeshMaterials.keys()) visitor(mesh);
+  }
+
+  restoreOriginalMaterials(): void {
+    for (const [mesh, material] of this.#originalMeshMaterials) {
+      mesh.material = material;
+    }
+  }
+
+  dispose(): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    this.restoreOriginalMaterials();
+    this.root.removeFromParent();
+    this.root.remove(this.sourceRoot);
+
+    const textures = new Set<THREE.Texture>();
+    for (const material of this.#ownedMaterials) {
+      collectMaterialTextures(material, textures);
+    }
+
+    const closedImages = new Set<object>();
+    for (const texture of textures) {
+      closeTextureImages(texture, closedImages);
+      texture.dispose();
+    }
+    for (const material of this.#ownedMaterials) material.dispose();
+    for (const geometry of this.#ownedGeometries) geometry.dispose();
+
+    this.#originalMeshMaterials.clear();
+    this.#ownedMaterials.clear();
+    this.#ownedGeometries.clear();
+  }
+
+  #captureOwnedResources(): void {
+    this.sourceRoot.traverse((object) => {
+      const renderable = object as THREE.Object3D & {
+        geometry?: unknown;
+        material?: unknown;
+      };
+      if (renderable.geometry instanceof THREE.BufferGeometry) {
+        this.#ownedGeometries.add(renderable.geometry);
+      }
+
+      if (object instanceof THREE.Mesh) {
+        const mesh = object as ImportedMesh;
+        this.#originalMeshMaterials.set(mesh, mesh.material);
+      }
+
+      for (const material of asMaterials(renderable.material)) {
+        this.#ownedMaterials.add(material);
+      }
+    });
+  }
+}
+
+export class ImportedAssetStore {
+  readonly #assets = new Map<string, ImportedAssetRuntime>();
+
+  get size(): number {
+    return this.#assets.size;
+  }
+
+  register(assetId: string, sourceRoot: THREE.Object3D): ImportedAssetRuntime {
+    const normalizedAssetId = assetId.trim();
+    if (!normalizedAssetId) {
+      throw new Error("Imported asset id must not be empty.");
+    }
+    if (this.#assets.has(normalizedAssetId)) {
+      throw new Error(`Duplicate imported asset id: ${normalizedAssetId}`);
+    }
+    for (const asset of this.#assets.values()) {
+      if (asset.sourceRoot === sourceRoot) {
+        throw new Error(
+          `Imported Object3D is already registered as asset: ${asset.assetId}`,
+        );
+      }
+    }
+
+    const asset = new ImportedAssetRuntime(normalizedAssetId, sourceRoot);
+    this.#assets.set(normalizedAssetId, asset);
+    return asset;
+  }
+
+  get(assetId: string): ImportedAssetRuntime | undefined {
+    return this.#assets.get(assetId);
+  }
+
+  delete(assetId: string): boolean {
+    const asset = this.#assets.get(assetId);
+    if (!asset) return false;
+    this.#assets.delete(assetId);
+    asset.dispose();
+    return true;
+  }
+
+  dispose(): void {
+    for (const asset of this.#assets.values()) asset.dispose();
+    this.#assets.clear();
+  }
+}
+
+function asMaterials(value: unknown): THREE.Material[] {
+  const values = Array.isArray(value) ? value : [value];
+  return values.filter(isMaterial);
+}
+
+function isMaterial(value: unknown): value is THREE.Material {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as THREE.Material).isMaterial === true
+  );
+}
+
+function collectMaterialTextures(
+  material: THREE.Material,
+  textures: Set<THREE.Texture>,
+): void {
+  const visited = new Set<object>();
+  for (const value of Object.values(material)) {
+    collectTextures(value, textures, visited, 0);
+  }
+}
+
+function collectTextures(
+  value: unknown,
+  textures: Set<THREE.Texture>,
+  visited: Set<object>,
+  depth: number,
+): void {
+  if (isTexture(value)) {
+    textures.add(value);
+    return;
+  }
+  if (depth >= 4 || typeof value !== "object" || value === null) return;
+  if (visited.has(value)) return;
+  visited.add(value);
+
+  if (Array.isArray(value)) {
+    for (const child of value) collectTextures(child, textures, visited, depth + 1);
+    return;
+  }
+  for (const child of Object.values(value)) {
+    collectTextures(child, textures, visited, depth + 1);
+  }
+}
+
+function isTexture(value: unknown): value is THREE.Texture {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as THREE.Texture).isTexture === true
+  );
+}
+
+function closeTextureImages(texture: THREE.Texture, closedImages: Set<object>): void {
+  closeImageValue(texture.image, closedImages);
+  closeImageValue(texture.source.data, closedImages);
+}
+
+function closeImageValue(value: unknown, closedImages: Set<object>): void {
+  if (Array.isArray(value)) {
+    for (const image of value) closeImageValue(image, closedImages);
+    return;
+  }
+  if (typeof value !== "object" || value === null || closedImages.has(value)) {
+    return;
+  }
+  closedImages.add(value);
+  const close = (value as { close?: unknown }).close;
+  if (typeof close === "function") close.call(value);
+}

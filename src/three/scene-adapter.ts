@@ -8,6 +8,8 @@ import type {
   TransformModel,
   Vec3Model,
 } from "../model/scene-model";
+import { calculateCameraFit } from "./camera-fit";
+import { ImportedAssetStore } from "./imported-asset-store";
 import { SceneGraphAdapter } from "./scene-graph-adapter";
 import { SceneInteractionAdapter } from "./scene-interaction-adapter";
 import {
@@ -18,9 +20,12 @@ import {
 interface CameraPose {
   position: Vec3Model;
   target: Vec3Model;
+  near: number;
+  far: number;
 }
 
 interface SceneAdapterOptions {
+  importedAssets?: ImportedAssetStore;
   onCameraInteractionEnd: (pose: CameraPose) => void;
   onObjectSelected: (objectId: string | null) => void;
   onObjectTransformCommitted: (
@@ -55,7 +60,7 @@ export class SceneAdapter {
     this.#environment = createNeutralEnvironment(this.#renderer);
     this.#scene.environment = this.#environment.texture;
     this.#controls = this.#createControls(model.camera);
-    this.#sceneGraph = new SceneGraphAdapter(this.#scene);
+    this.#sceneGraph = new SceneGraphAdapter(this.#scene, options.importedAssets);
     this.#interaction = new SceneInteractionAdapter(
       this.#scene,
       this.#camera,
@@ -85,7 +90,12 @@ export class SceneAdapter {
     this.#axes.visible = model.helpers.axesVisible;
     this.#applyCamera(model.camera);
 
-    this.#sceneGraph.applyModel(model.objects, model.lights, model.materials);
+    this.#sceneGraph.applyModel(
+      model.objects,
+      model.lights,
+      model.materials,
+      model.imports,
+    );
     this.#interaction.refreshSelection();
   }
 
@@ -95,6 +105,41 @@ export class SceneAdapter {
 
   setTransformMode(mode: TransformMode): void {
     this.#interaction.setTransformMode(mode);
+  }
+
+  fitToObject(objectId: string): boolean {
+    const object = this.#sceneGraph.getObjectById(objectId);
+    if (!object) return false;
+
+    object.updateWorldMatrix(true, true);
+    const bounds = new THREE.Box3().setFromObject(object, true);
+    let fit;
+    try {
+      fit = calculateCameraFit(
+        bounds,
+        this.#camera.fov,
+        this.#camera.aspect,
+        this.#camera.position.clone().sub(this.#controls.target),
+      );
+    } catch {
+      return false;
+    }
+
+    this.#camera.position.copy(fit.position);
+    this.#camera.near = fit.near;
+    this.#camera.far = fit.far;
+    this.#camera.updateProjectionMatrix();
+    this.#controls.target.copy(fit.target);
+    this.#controls.minDistance = fit.minDistance;
+    this.#controls.maxDistance = fit.maxDistance;
+    this.#controls.update();
+    this.#onCameraInteractionEnd({
+      position: this.#toVec3Model(fit.position),
+      target: this.#toVec3Model(fit.target),
+      near: Number(fit.near.toPrecision(8)),
+      far: Number(fit.far.toPrecision(8)),
+    });
+    return true;
   }
 
   dispose(): void {
@@ -152,6 +197,8 @@ export class SceneAdapter {
       this.#onCameraInteractionEnd({
         position: this.#toVec3Model(this.#camera.position),
         target: this.#toVec3Model(controls.target),
+        near: this.#camera.near,
+        far: this.#camera.far,
       });
     });
     controls.update();

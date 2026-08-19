@@ -1,4 +1,12 @@
+import { ImportManager } from "../importers";
 import { createDefaultSceneModel } from "../model/default-scene";
+import {
+  deleteImportedScene,
+  renameImportedScene,
+  setImportedSceneMaterialMode,
+  setImportedSceneVisibility,
+  updateImportedSceneTransform,
+} from "../model/imported-scene-model";
 import {
   addMaterial,
   assignMaterial,
@@ -21,9 +29,11 @@ import {
   type GeometryUpdate,
   type SceneObjectTransformUpdate,
 } from "../model/scene-object-commands";
+import { ImportedAssetStore } from "../three/imported-asset-store";
 import { SceneAdapter } from "../three/scene-adapter";
 import { AppShell } from "../ui/app-shell";
 import { EditorStore } from "./editor-store";
+import { ImportController } from "./import-controller";
 import { SceneStore } from "./scene-store";
 
 export interface Application {
@@ -37,14 +47,20 @@ export function createApplication(root: HTMLElement): Application {
     selectedObjectId: initialModel.objects[0]?.id ?? null,
     transformMode: "translate",
   });
+  const importedAssets = new ImportedAssetStore();
+  const importManager = new ImportManager();
+  const importAbortController = new AbortController();
   const shell = new AppShell(root);
 
   try {
     const adapter = new SceneAdapter(shell.viewportElement, store.getSnapshot(), {
-      onCameraInteractionEnd: ({ position, target }) => {
+      importedAssets,
+      onCameraInteractionEnd: ({ position, target, near, far }) => {
         store.update((draft) => {
           draft.camera.position = position;
           draft.camera.target = target;
+          draft.camera.near = near;
+          draft.camera.far = far;
         });
       },
       onObjectSelected: (objectId) => {
@@ -52,18 +68,33 @@ export function createApplication(root: HTMLElement): Application {
       },
       onObjectTransformCommitted: (objectId, transform) => {
         store.update((draft) => {
-          updateSceneObjectTransform(draft, objectId, transform);
+          if (!updateSceneObjectTransform(draft, objectId, transform)) {
+            updateImportedSceneTransform(draft.imports, objectId, transform);
+          }
         });
       },
     });
+    const importController = new ImportController(
+      importManager,
+      importedAssets,
+      store,
+      editorStore,
+      adapter,
+    );
     shell.refreshPreferences();
 
     let currentEditorState = editorStore.getSnapshot();
 
     const unsubscribeScene = store.subscribe((model) => {
       const selectedId = currentEditorState.selectedObjectId;
-      if (selectedId && !model.objects.some(({ id }) => id === selectedId)) {
-        editorStore.setSelectedObjectId(model.objects[0]?.id ?? null);
+      const selectionExists =
+        !selectedId ||
+        model.objects.some(({ id }) => id === selectedId) ||
+        model.imports.some(({ id }) => id === selectedId);
+      if (!selectionExists) {
+        editorStore.setSelectedObjectId(
+          model.objects[0]?.id ?? model.imports[0]?.id ?? null,
+        );
         currentEditorState = editorStore.getSnapshot();
       }
       adapter.applyModel(model);
@@ -93,6 +124,12 @@ export function createApplication(root: HTMLElement): Application {
           draft.camera = defaultCamera;
         });
       },
+      importFiles: async (files, options) => {
+        await importController.importFiles(files, {
+          ...options,
+          signal: importAbortController.signal,
+        });
+      },
       addObject: (primitive) => {
         let addedId: string | null = null;
         store.update((draft) => {
@@ -105,12 +142,16 @@ export function createApplication(root: HTMLElement): Application {
       },
       setObjectVisibility: (objectId, visible) => {
         store.update((draft) => {
-          setSceneObjectVisibility(draft, objectId, visible);
+          if (!setSceneObjectVisibility(draft, objectId, visible)) {
+            setImportedSceneVisibility(draft.imports, objectId, visible);
+          }
         });
       },
       updateObjectName: (objectId, name) => {
         store.update((draft) => {
-          renameSceneObject(draft, objectId, name);
+          if (!renameSceneObject(draft, objectId, name)) {
+            renameImportedScene(draft.imports, objectId, name);
+          }
         });
       },
       updateObjectTransform: (objectId, group, axis, value) => {
@@ -118,7 +159,9 @@ export function createApplication(root: HTMLElement): Application {
           [group]: { [axis]: value },
         } as SceneObjectTransformUpdate;
         store.update((draft) => {
-          updateSceneObjectTransform(draft, objectId, update);
+          if (!updateSceneObjectTransform(draft, objectId, update)) {
+            updateImportedSceneTransform(draft.imports, objectId, update);
+          }
         });
       },
       updateObjectGeometry: (objectId, key, value) => {
@@ -145,15 +188,46 @@ export function createApplication(root: HTMLElement): Application {
 
         let fallbackId: string | null = null;
         store.update((draft) => {
-          const index = draft.objects.findIndex(({ id }) => id === objectId);
-          if (index < 0 || !deleteSceneObject(draft, objectId)) return;
+          const objectIndex = draft.objects.findIndex(({ id }) => id === objectId);
+          if (objectIndex >= 0 && deleteSceneObject(draft, objectId)) {
+            fallbackId =
+              draft.objects[Math.min(objectIndex, draft.objects.length - 1)]
+                ?.id ??
+              draft.imports[0]?.id ??
+              null;
+            return;
+          }
+
+          const importIndex = draft.imports.findIndex(({ id }) => id === objectId);
+          if (importIndex < 0 || !deleteImportedScene(draft.imports, objectId)) {
+            return;
+          }
           fallbackId =
-            draft.objects[Math.min(index, draft.objects.length - 1)]?.id ?? null;
+            draft.imports[Math.min(importIndex, draft.imports.length - 1)]?.id ??
+            draft.objects[0]?.id ??
+            null;
         });
         if (selectedId === objectId) editorStore.setSelectedObjectId(fallbackId);
       },
       setTransformMode: (mode) => {
         editorStore.setTransformMode(mode);
+      },
+      setImportedMaterialMode: (objectId, mode, customMaterialId) => {
+        store.update((draft) => {
+          if (
+            mode === "custom" &&
+            (!customMaterialId ||
+              !draft.materials.some(({ id }) => id === customMaterialId))
+          ) {
+            return;
+          }
+          setImportedSceneMaterialMode(
+            draft.imports,
+            objectId,
+            mode,
+            customMaterialId,
+          );
+        });
       },
       createMaterialFromPreset: (presetId) => {
         const presetName = getMaterialPreset(presetId).label.en;
@@ -178,6 +252,13 @@ export function createApplication(root: HTMLElement): Application {
       },
       deleteMaterial: (materialId) => {
         store.update((draft) => {
+          if (
+            draft.imports.some(
+              (model) => model.materialMode === "custom" && model.customMaterialId === materialId,
+            )
+          ) {
+            return;
+          }
           deleteMaterial(draft, materialId);
         });
       },
@@ -201,9 +282,11 @@ export function createApplication(root: HTMLElement): Application {
     shell.setReady();
     return {
       dispose: () => {
+        importAbortController.abort();
         unsubscribeEditor();
         unsubscribeScene();
         adapter.dispose();
+        importedAssets.dispose();
         shell.dispose();
       },
     };

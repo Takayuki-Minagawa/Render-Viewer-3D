@@ -14,7 +14,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test tests/material-model.test.mjs tests/material-library-ui.test.mjs tests/material-capability-ui.test.mjs tests/material-basic-editor.test.mjs tests/material-detail-state.test.mjs tests/material-runtime.test.mjs tests/refactoring.test.mjs tests/ui-settings.test.mjs tests/editor-store.test.mjs tests/scene-object-commands.test.mjs tests/geometry-factory.test.mjs tests/scene-interaction-adapter.test.mjs",
+    "test": "node --test tests",
     "prebuild": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
@@ -24,6 +24,7 @@
     "node": "^18.0.0 || ^20.0.0 || >=22.0.0"
   },
   "dependencies": {
+    "occt-wasm": "4.3.1",
     "three": "^0.185.1"
   },
   "devDependencies": {

@@ -14,7 +14,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test tests/camera-fit.test.mjs tests/editor-store.test.mjs tests/geometry-factory.test.mjs tests/import-controller.test.mjs tests/import-ui-state.test.mjs tests/imported-asset-store.test.mjs tests/imported-material-adapter.test.mjs tests/imported-scene-adapter.test.mjs tests/imported-scene-model.test.mjs tests/importers-core.test.mjs tests/importers-formats.test.mjs tests/importers-step.test.mjs tests/material-basic-editor.test.mjs tests/material-capability-ui.test.mjs tests/material-detail-state.test.mjs tests/material-library-ui.test.mjs tests/material-model.test.mjs tests/material-runtime.test.mjs tests/refactoring.test.mjs tests/scene-interaction-adapter.test.mjs tests/scene-object-commands.test.mjs tests/ui-settings.test.mjs",
+    "test": "node --test tests/camera-fit.test.mjs tests/editor-store.test.mjs tests/geometry-factory.test.mjs tests/import-controller.test.mjs tests/import-ui-state.test.mjs tests/imported-asset-store.test.mjs tests/imported-material-adapter.test.mjs tests/imported-scene-adapter.test.mjs tests/imported-scene-model.test.mjs tests/importers-core.test.mjs tests/importers-formats.test.mjs tests/importers-step.test.mjs tests/material-basic-editor.test.mjs tests/material-capability-ui.test.mjs tests/material-detail-state.test.mjs tests/material-library-ui.test.mjs tests/material-model.test.mjs tests/material-runtime.test.mjs tests/refactoring.test.mjs tests/scene-editor-view-cache.test.mjs tests/scene-interaction-adapter.test.mjs tests/scene-object-commands.test.mjs tests/ui-settings.test.mjs",
     "prebuild": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",

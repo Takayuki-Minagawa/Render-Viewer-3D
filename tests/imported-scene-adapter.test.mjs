@@ -59,17 +59,31 @@ describe("ImportedSceneAdapter", () => {
     assert.equal(source.firstMesh.userData.sceneModelId, "import-01");
     assert.equal(source.secondMesh.userData.sceneModelId, "import-01");
 
+    const originalForEachMesh = asset.forEachMesh.bind(asset);
+    let traversalCount = 0;
+    asset.forEachMesh = (callback) => {
+      traversalCount += 1;
+      originalForEachMesh(callback);
+    };
+    adapter.applyModel([model], [customDefinition]);
+    assert.equal(traversalCount, 0);
+
     const customModel = structuredClone(model);
     customModel.materialMode = "custom";
     customModel.customMaterialId = customDefinition.id;
     adapter.applyModel([customModel], [customDefinition]);
+    assert.equal(traversalCount, 1);
     const customRuntime = source.firstMesh.material;
     assert.ok(customRuntime instanceof THREE.MeshPhysicalMaterial);
     assert.equal(source.secondMesh.material, customRuntime);
     assert.notEqual(customRuntime, source.firstMaterial);
 
+    adapter.applyModel([customModel], [customDefinition]);
+    assert.equal(traversalCount, 1);
+
     const customDisposal = trackDisposal(customRuntime);
     adapter.applyModel([model], [customDefinition]);
+    assert.equal(traversalCount, 1);
     assert.equal(source.firstMesh.material, source.firstMaterial);
     assert.equal(source.secondMesh.material, source.secondMaterialArray);
     assert.equal(customDisposal.count, 0);

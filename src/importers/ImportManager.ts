@@ -57,7 +57,8 @@ export class ImportManager {
   }
 
   findImporter(file: File): ModelImporter | undefined {
-    return this.importersByExtension.get(fileExtension(file.name));
+    const importer = this.importersByExtension.get(fileExtension(file.name));
+    return importer?.canImport(file) === true ? importer : undefined;
   }
 
   canImport(file: File): boolean {

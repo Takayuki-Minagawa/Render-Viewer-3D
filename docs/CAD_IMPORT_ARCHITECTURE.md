@@ -77,6 +77,10 @@ material modeを持つJSON化可能なrecordです。一方、`THREE.Object3D`�
 Textureは`ImportedAssetStore`だけが所有します。これによりSceneModelへ巨大なtyped arrayや
 循環参照を混入させず、削除・アプリ終了時にGPU / CPU resourceを一度だけdisposeできます。
 
+別々のasset rootが同一のGeometry / Material / Texture / Imageを共有すると、一方だけを削除した
+時点で所有権が曖昧になります。そのため登録時にasset間の共有を検出して明示的に拒否し、各resourceが
+必ず1つのassetだけに所有される境界を維持します。
+
 この分離の結果、import recordだけでは外部モデルを再構築できません。シーン永続化を追加する
 場合は、元ファイルを再選択する仕組み、またはassetを別形式で保存・復元する仕組みが必要です。
 

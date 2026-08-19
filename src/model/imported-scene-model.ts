@@ -75,6 +75,10 @@ const DEFAULT_TRANSFORM: TransformModel = {
 };
 
 const MAX_NAME_LENGTH = 80;
+const POSITION_LIMIT = 10_000;
+const ROTATION_LIMIT = 360_000;
+const SCALE_MIN = 0.01;
+const SCALE_MAX = 1_000;
 
 export function createImportedSceneModel(
   input: CreateImportedSceneInput,
@@ -91,10 +95,10 @@ export function createImportedSceneModel(
     throw new Error("Custom material mode requires a material id.");
   }
 
-  const transform = mergeTransform(DEFAULT_TRANSFORM, input.transform);
-  if (!isFiniteTransformUpdate(transform)) {
+  if (input.transform && !isFiniteTransformUpdate(input.transform)) {
     throw new Error("Imported scene transform must contain only finite values.");
   }
+  const transform = mergeTransform(DEFAULT_TRANSFORM, input.transform);
 
   return {
     id,
@@ -202,21 +206,49 @@ function mergeTransform(
   update: PartialTransformModel | undefined,
 ): TransformModel {
   return {
-    position: mergeVector(current.position, update?.position),
+    position: mergeVector(
+      current.position,
+      update?.position,
+      -POSITION_LIMIT,
+      POSITION_LIMIT,
+    ),
     rotationDegrees: mergeVector(
       current.rotationDegrees,
       update?.rotationDegrees,
+      -ROTATION_LIMIT,
+      ROTATION_LIMIT,
     ),
-    scale: mergeVector(current.scale, update?.scale),
+    scale: mergeVector(
+      current.scale,
+      update?.scale,
+      SCALE_MIN,
+      SCALE_MAX,
+    ),
   };
 }
 
-function mergeVector(current: Vec3Model, update: Partial<Vec3Model> | undefined): Vec3Model {
+function mergeVector(
+  current: Vec3Model,
+  update: Partial<Vec3Model> | undefined,
+  minimum: number,
+  maximum: number,
+): Vec3Model {
   return {
-    x: update?.x ?? current.x,
-    y: update?.y ?? current.y,
-    z: update?.z ?? current.z,
+    x: normalizeNumber(update?.x, current.x, minimum, maximum),
+    y: normalizeNumber(update?.y, current.y, minimum, maximum),
+    z: normalizeNumber(update?.z, current.z, minimum, maximum),
   };
+}
+
+function normalizeNumber(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const next = value ?? fallback;
+  const finite = Number.isFinite(next) ? next : fallback;
+  return Math.min(maximum, Math.max(minimum, finite));
 }
 
 function isFiniteTransformUpdate(update: PartialTransformModel): boolean {

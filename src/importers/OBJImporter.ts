@@ -29,6 +29,7 @@ export class OBJImporter extends BaseImporter {
     options: ImportOptions,
   ): Promise<ImportedModel> {
     this.assertNotAborted(options);
+    this.assertWithinMainThreadBudget([primary]);
     const source = await primary.text();
     this.assertNotAborted(options);
 

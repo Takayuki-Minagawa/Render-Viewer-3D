@@ -41,6 +41,14 @@ function options(overrides = {}) {
   };
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 function fixtureMesh() {
   return {
     positions: new Float32Array([
@@ -240,5 +248,81 @@ describe("STEPImporter", () => {
       /invalid triangle indices/u,
     );
     assert.deepEqual(calls, ["release", "terminate"]);
+  });
+
+  it("aborts a pending STEP parse and terminates the worker once", { timeout: 1_000 }, async () => {
+    const calls = [];
+    const started = deferred();
+    const pending = deferred();
+    const worker = {
+      importStep() {
+        calls.push("importStep");
+        started.resolve();
+        return pending.promise;
+      },
+      async tessellate() {
+        calls.push("tessellate");
+        return fixtureMesh();
+      },
+      async release() {
+        calls.push("release");
+      },
+      terminate() {
+        calls.push("terminate");
+      },
+    };
+    const controller = new AbortController();
+    const importer = new STEPImporter(async () => worker);
+    const primary = primaryFile();
+    const importing = importer.import(
+      primary,
+      [primary],
+      options({ signal: controller.signal }),
+    );
+
+    await started.promise;
+    const reason = new Error("stop parsing");
+    controller.abort(reason);
+
+    await assert.rejects(importing, (error) => error === reason);
+    assert.deepEqual(calls, ["importStep", "terminate"]);
+  });
+
+  it("aborts pending tessellation without releasing a terminated worker", { timeout: 1_000 }, async () => {
+    const calls = [];
+    const started = deferred();
+    const pending = deferred();
+    const worker = {
+      async importStep() {
+        calls.push("importStep");
+        return 11;
+      },
+      tessellate() {
+        calls.push("tessellate");
+        started.resolve();
+        return pending.promise;
+      },
+      async release() {
+        calls.push("release");
+      },
+      terminate() {
+        calls.push("terminate");
+      },
+    };
+    const controller = new AbortController();
+    const importer = new STEPImporter(async () => worker);
+    const primary = primaryFile();
+    const importing = importer.import(
+      primary,
+      [primary],
+      options({ signal: controller.signal }),
+    );
+
+    await started.promise;
+    const reason = new Error("stop tessellation");
+    controller.abort(reason);
+
+    await assert.rejects(importing, (error) => error === reason);
+    assert.deepEqual(calls, ["importStep", "tessellate", "terminate"]);
   });
 });

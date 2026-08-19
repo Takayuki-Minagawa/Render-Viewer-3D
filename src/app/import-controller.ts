@@ -14,6 +14,7 @@ import {
   type ImportedModel,
   type ImportOptions,
 } from "../importers";
+import { throwIfImportAborted } from "../importers/abort";
 import type { ImportedAssetStore } from "../three/imported-asset-store";
 
 interface ImportViewport {
@@ -61,43 +62,49 @@ export class ImportController {
     const snapshot = this.sceneStore.getSnapshot();
     const id = this.#createUniqueId(primary.name, snapshot);
     const assetId = `${id}-asset`;
-    const hierarchy = buildImportedHierarchy(imported.root);
-    if (hierarchy.truncated) {
-      imported.warnings.push({
-        code: "hierarchy-truncated",
-        message: `The Object Tree preview was limited to ${HIERARCHY_NODE_LIMIT.toLocaleString("en-US")} nodes. The complete Three.js hierarchy remains loaded.`,
-      });
-    }
-
-    const materialDefinitions = collectImportedMaterialDefinitions(
-      imported.root,
-      id,
-    );
-    const materialIds = new Set(snapshot.materials.map(({ id }) => id));
-    for (const definition of materialDefinitions) {
-      const baseId = definition.id;
-      let ordinal = 2;
-      while (materialIds.has(definition.id)) {
-        definition.id = `${baseId}-${ordinal}`;
-        ordinal += 1;
-      }
-      materialIds.add(definition.id);
-    }
-
-    const model = createImportedSceneRecord(
-      id,
-      assetId,
-      primary,
-      imported,
-      hierarchy.nodes,
-      materialDefinitions[0]?.id ?? null,
-    );
     this.assets.register(assetId, imported.root);
+
     try {
+      throwIfImportAborted(options.signal);
+      const hierarchy = buildImportedHierarchy(imported.root);
+      if (hierarchy.truncated) {
+        imported.warnings.push({
+          code: "hierarchy-truncated",
+          message: `The Object Tree preview was limited to ${HIERARCHY_NODE_LIMIT.toLocaleString("en-US")} nodes. The complete Three.js hierarchy remains loaded.`,
+        });
+      }
+
+      const materialDefinitions = collectImportedMaterialDefinitions(
+        imported.root,
+        id,
+      );
+      const materialIds = new Set(snapshot.materials.map(({ id }) => id));
+      for (const definition of materialDefinitions) {
+        const baseId = definition.id;
+        let ordinal = 2;
+        while (materialIds.has(definition.id)) {
+          definition.id = `${baseId}-${ordinal}`;
+          ordinal += 1;
+        }
+        materialIds.add(definition.id);
+      }
+
+      const model = createImportedSceneRecord(
+        id,
+        assetId,
+        primary,
+        imported,
+        hierarchy.nodes,
+        materialDefinitions[0]?.id ?? null,
+      );
       this.sceneStore.update((draft) => {
         addImportedScene(draft.imports, model);
         draft.materials.push(...materialDefinitions);
       });
+
+      this.editorStore.setSelectedObjectId(id);
+      this.viewport.fitToObject(id);
+      return model;
     } catch (error) {
       const published = this.sceneStore
         .getSnapshot()
@@ -105,10 +112,6 @@ export class ImportController {
       if (!published) this.assets.delete(assetId);
       throw error;
     }
-
-    this.editorStore.setSelectedObjectId(id);
-    this.viewport.fitToObject(id);
-    return model;
   }
 
   #createUniqueId(fileName: string, snapshot: SceneSnapshot): string {
@@ -135,6 +138,7 @@ export class ImportController {
 
 export function buildImportedHierarchy(root: THREE.Object3D): HierarchyResult {
   let count = 0;
+  let visited = 0;
   let truncated = false;
 
   const visit = (
@@ -142,7 +146,12 @@ export function buildImportedHierarchy(root: THREE.Object3D): HierarchyResult {
     path: string,
     depth: number,
   ): ImportedNodeModel | undefined => {
-    if (count >= HIERARCHY_NODE_LIMIT || depth > HIERARCHY_DEPTH_LIMIT) {
+    if (visited >= HIERARCHY_NODE_LIMIT) {
+      truncated = true;
+      return undefined;
+    }
+    visited += 1;
+    if (depth > HIERARCHY_DEPTH_LIMIT) {
       truncated = true;
       return undefined;
     }
@@ -156,18 +165,28 @@ export function buildImportedHierarchy(root: THREE.Object3D): HierarchyResult {
       triangleCount: mesh ? triangleCount(object.geometry) : 0,
       children: [],
     };
-    object.children.forEach((child, index) => {
+    for (let index = 0; index < object.children.length; index += 1) {
+      if (visited >= HIERARCHY_NODE_LIMIT) {
+        truncated = true;
+        break;
+      }
+      const child = object.children[index];
       const childNode = visit(child, `${path}-${index}`, depth + 1);
       if (childNode) node.children.push(childNode);
-    });
+    }
     return node;
   };
 
   const nodes: ImportedNodeModel[] = [];
-  root.children.forEach((child, index) => {
+  for (let index = 0; index < root.children.length; index += 1) {
+    if (visited >= HIERARCHY_NODE_LIMIT) {
+      truncated = true;
+      break;
+    }
+    const child = root.children[index];
     const node = visit(child, `node-${index}`, 0);
     if (node) nodes.push(node);
-  });
+  }
   return { nodes, truncated };
 }
 

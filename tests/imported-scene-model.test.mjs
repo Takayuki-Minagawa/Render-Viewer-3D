@@ -106,6 +106,20 @@ describe("imported scene model commands", () => {
     assert.equal(imports[0].transform.position.x, 4);
 
     assert.equal(
+      importedModel.updateImportedSceneTransform(imports, "import-01", {
+        position: { x: 1e308, y: -1e308 },
+        rotationDegrees: { x: 1e308, z: -1e308 },
+        scale: { x: 0, y: 1e308, z: -1 },
+      }),
+      true,
+    );
+    assert.deepEqual(imports[0].transform, {
+      position: { x: 10_000, y: -10_000, z: 0 },
+      rotationDegrees: { x: 360_000, y: 0, z: -360_000 },
+      scale: { x: 0.01, y: 1_000, z: 0.01 },
+    });
+
+    assert.equal(
       importedModel.setImportedSceneMaterialMode(
         imports,
         "import-01",

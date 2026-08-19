@@ -13,9 +13,7 @@ function decodePath(value: string): string {
 }
 
 function normalizePath(value: string): string {
-  const segments = decodePath(stripQueryAndFragment(value))
-    .replaceAll("\\", "/")
-    .split("/");
+  const segments = value.replaceAll("\\", "/").split("/");
   const normalized: string[] = [];
 
   for (const segment of segments) {
@@ -43,7 +41,7 @@ function relativePathOf(file: File): string {
 export class LocalResourceResolver {
   readonly manager: THREE.LoadingManager;
 
-  private readonly exactFiles = new Map<string, File>();
+  private readonly exactFiles = new Map<string, File | null>();
   private readonly basenameFiles = new Map<string, File | null>();
   private readonly objectUrls = new Map<File, string>();
   private readonly unresolved = new Set<string>();
@@ -57,7 +55,12 @@ export class LocalResourceResolver {
 
     for (const file of files) {
       const path = relativePathOf(file);
-      this.exactFiles.set(path.toLowerCase(), file);
+      const key = path.toLowerCase();
+      const exact = this.exactFiles.get(key);
+      this.exactFiles.set(
+        key,
+        exact === undefined || exact === file ? file : null,
+      );
 
       const basename = path.split("/").at(-1)?.toLowerCase();
       if (!basename) {
@@ -79,33 +82,47 @@ export class LocalResourceResolver {
   }
 
   resolve(url: string): string {
-    if (/^data:/iu.test(url)) {
+    const canonicalUrl = url.replaceAll("\\", "/");
+    if (/^(?:data|blob):/iu.test(canonicalUrl)) {
       return url;
     }
 
-    if (isExternalResource(url)) {
+    const decodedPath = decodePath(stripQueryAndFragment(canonicalUrl));
+    if (isExternalResource(decodedPath)) {
       this.unresolved.add(url);
       throw new Error(
         `External model resources are not loaded: ${url}. Select the referenced resource as a local file instead.`,
       );
     }
 
-    const path = normalizePath(url);
+    const path = normalizePath(decodedPath);
     const lowerPath = path.toLowerCase();
     const basedPath = this.baseDirectory
-      ? normalizePath(`${this.baseDirectory}/${path}`).toLowerCase()
+      ? normalizePath(`${this.baseDirectory}/${decodedPath}`).toLowerCase()
       : lowerPath;
     const basename = lowerPath.split("/").at(-1);
-    const file =
-      this.exactFiles.get(basedPath) ??
-      this.exactFiles.get(lowerPath) ??
-      (basename ? this.basenameFiles.get(basename) : undefined);
-
-    if (!file) {
-      if (path) {
-        this.unresolved.add(path);
+    let file: File | null | undefined;
+    for (const key of new Set([basedPath, lowerPath])) {
+      if (this.exactFiles.has(key)) {
+        file = this.exactFiles.get(key);
+        break;
       }
-      return url;
+    }
+    if (file === undefined && basename) {
+      file = this.basenameFiles.get(basename);
+    }
+
+    if (file === null) {
+      this.unresolved.add(path || url);
+      throw new Error(
+        `Ambiguous local model resource: ${url}. Select files with their relative folders preserved.`,
+      );
+    }
+    if (file === undefined) {
+      this.unresolved.add(path || url);
+      throw new Error(
+        `Referenced local model resource was not selected: ${url}. Select it together with the model file.`,
+      );
     }
 
     const existingUrl = this.objectUrls.get(file);

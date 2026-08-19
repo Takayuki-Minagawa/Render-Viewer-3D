@@ -17,6 +17,7 @@ export class STLImporter extends BaseImporter {
     options: ImportOptions,
   ): Promise<ImportedModel> {
     this.assertNotAborted(options);
+    this.assertWithinMainThreadBudget([primary]);
     const data = await primary.arrayBuffer();
     this.assertNotAborted(options);
 

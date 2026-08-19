@@ -16,6 +16,8 @@ import { MaterialRuntimeCache } from "./material/material-runtime-cache";
 interface ImportedSceneEntry {
   readonly assetId: string;
   readonly asset: ImportedAssetRuntime;
+  readonly rootSignature: string;
+  readonly materialSignature: string;
 }
 
 export class ImportedSceneAdapter {
@@ -43,13 +45,27 @@ export class ImportedSceneAdapter {
     const nextEntries = new Map<string, ImportedSceneEntry>();
 
     for (const model of models) {
+      const previous = this.#entries.get(model.id);
       const asset = resolvedAssets.get(model.id);
       if (!asset) {
         throw new Error(`Missing resolved imported asset for model: ${model.id}`);
       }
       if (asset.root.parent !== this.#scene) this.#scene.add(asset.root);
-      this.#applyImportedScene(asset, model);
-      nextEntries.set(model.id, { assetId: model.assetId, asset });
+      const rootSignature = importedRootSignature(model);
+      const materialSignature = importedMaterialSignature(model);
+      this.#applyImportedScene(
+        asset,
+        model,
+        previous,
+        rootSignature,
+        materialSignature,
+      );
+      nextEntries.set(model.id, {
+        assetId: model.assetId,
+        asset,
+        rootSignature,
+        materialSignature,
+      });
     }
 
     for (const assetId of previousAssetIds) {
@@ -137,46 +153,81 @@ export class ImportedSceneAdapter {
   #applyImportedScene(
     asset: ImportedAssetRuntime,
     model: ImportedSceneSnapshot,
+    previous: ImportedSceneEntry | undefined,
+    rootSignature: string,
+    materialSignature: string,
   ): void {
+    const prior = previous?.asset === asset ? previous : undefined;
     const { root } = asset;
-    root.name = model.name;
-    root.userData.sceneModelId = model.id;
-    root.visible = model.visible;
-    root.position.set(
-      model.transform.position.x,
-      model.transform.position.y,
-      model.transform.position.z,
-    );
-    root.rotation.set(
-      THREE.MathUtils.degToRad(model.transform.rotationDegrees.x),
-      THREE.MathUtils.degToRad(model.transform.rotationDegrees.y),
-      THREE.MathUtils.degToRad(model.transform.rotationDegrees.z),
-    );
-    root.scale.set(
-      model.transform.scale.x,
-      model.transform.scale.y,
-      model.transform.scale.z,
-    );
 
-    if (model.materialMode === "imported") {
-      asset.restoreOriginalMaterials();
-    } else {
-      const materialId = model.customMaterialId;
-      if (!materialId) {
-        throw new Error(
-          `Custom material mode requires a material id for imported scene: ${model.id}`,
-        );
-      }
-      const material = this.#materials.requireMaterial(materialId);
+    if (!prior) {
+      root.userData.sceneModelId = model.id;
       asset.forEachMesh((mesh) => {
-        mesh.material = material;
+        mesh.userData.sceneModelId = model.id;
       });
     }
 
-    asset.forEachMesh((mesh) => {
-      mesh.userData.sceneModelId = model.id;
-    });
+    if (!prior || prior.rootSignature !== rootSignature) {
+      root.name = model.name;
+      root.visible = model.visible;
+      root.position.set(
+        model.transform.position.x,
+        model.transform.position.y,
+        model.transform.position.z,
+      );
+      root.rotation.set(
+        THREE.MathUtils.degToRad(model.transform.rotationDegrees.x),
+        THREE.MathUtils.degToRad(model.transform.rotationDegrees.y),
+        THREE.MathUtils.degToRad(model.transform.rotationDegrees.z),
+      );
+      root.scale.set(
+        model.transform.scale.x,
+        model.transform.scale.y,
+        model.transform.scale.z,
+      );
+    }
+
+    if (!prior || prior.materialSignature !== materialSignature) {
+      if (model.materialMode === "imported") {
+        asset.restoreOriginalMaterials();
+      } else {
+        const materialId = model.customMaterialId;
+        if (!materialId) {
+          throw new Error(
+            `Custom material mode requires a material id for imported scene: ${model.id}`,
+          );
+        }
+        const material = this.#materials.requireMaterial(materialId);
+        asset.forEachMesh((mesh) => {
+          mesh.material = material;
+        });
+      }
+    }
   }
+}
+
+function importedRootSignature(model: ImportedSceneSnapshot): string {
+  const { position, rotationDegrees, scale } = model.transform;
+  return JSON.stringify([
+    model.name,
+    model.visible,
+    position.x,
+    position.y,
+    position.z,
+    rotationDegrees.x,
+    rotationDegrees.y,
+    rotationDegrees.z,
+    scale.x,
+    scale.y,
+    scale.z,
+  ]);
+}
+
+function importedMaterialSignature(model: ImportedSceneSnapshot): string {
+  return JSON.stringify([
+    model.materialMode,
+    model.customMaterialId,
+  ]);
 }
 
 function isEffectivelyVisible(mesh: ImportedMesh, root: THREE.Object3D): boolean {

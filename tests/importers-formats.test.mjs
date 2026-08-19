@@ -264,3 +264,22 @@ describe("STLImporter", () => {
     assertFiniteBounds(imported.root);
   });
 });
+
+describe("main-thread importer safety budget", () => {
+  it("rejects oversized glTF, OBJ, and STL input before parsing", async () => {
+    for (const [Importer, name] of [
+      [GLTFImporter, "oversized.glb"],
+      [OBJImporter, "oversized.obj"],
+      [STLImporter, "oversized.stl"],
+    ]) {
+      const primary = new File([""], name);
+      Object.defineProperty(primary, "size", {
+        value: 32 * 1024 * 1024 + 1,
+      });
+      await assert.rejects(
+        new Importer().import(primary, [primary], options()),
+        /32 MiB main-thread safety limit/,
+      );
+    }
+  });
+});

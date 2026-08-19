@@ -88,6 +88,8 @@ export class ImportedAssetRuntime {
 
 export class ImportedAssetStore {
   readonly #assets = new Map<string, ImportedAssetRuntime>();
+  readonly #assetResources = new Map<string, Set<object>>();
+  readonly #ownedResources = new Set<object>();
 
   get size(): number {
     return this.#assets.size;
@@ -109,8 +111,21 @@ export class ImportedAssetStore {
       }
     }
 
+    const resources = collectOwnedResourceIdentities(sourceRoot);
+    for (const resource of resources) {
+      if (this.#ownedResources.has(resource)) {
+        throw new Error(
+          "Imported assets must not share geometry, material, texture, or image resources.",
+        );
+      }
+    }
+
     const asset = new ImportedAssetRuntime(normalizedAssetId, sourceRoot);
     this.#assets.set(normalizedAssetId, asset);
+    this.#assetResources.set(normalizedAssetId, resources);
+    for (const resource of resources) {
+      this.#ownedResources.add(resource);
+    }
     return asset;
   }
 
@@ -121,15 +136,62 @@ export class ImportedAssetStore {
   delete(assetId: string): boolean {
     const asset = this.#assets.get(assetId);
     if (!asset) return false;
+    const resources = this.#assetResources.get(assetId) ?? new Set<object>();
     this.#assets.delete(assetId);
-    asset.dispose();
+    this.#assetResources.delete(assetId);
+    try {
+      asset.dispose();
+    } finally {
+      for (const resource of resources) {
+        this.#ownedResources.delete(resource);
+      }
+    }
     return true;
   }
 
   dispose(): void {
-    for (const asset of this.#assets.values()) asset.dispose();
-    this.#assets.clear();
+    for (const assetId of [...this.#assets.keys()]) this.delete(assetId);
   }
+}
+
+function collectOwnedResourceIdentities(
+  root: THREE.Object3D,
+): Set<object> {
+  const resources = new Set<object>();
+  const materials = new Set<THREE.Material>();
+  const textures = new Set<THREE.Texture>();
+
+  root.traverse((object) => {
+    const renderable = object as THREE.Object3D & {
+      geometry?: unknown;
+      material?: unknown;
+    };
+    if (renderable.geometry instanceof THREE.BufferGeometry) {
+      resources.add(renderable.geometry);
+    }
+    for (const material of asMaterials(renderable.material)) {
+      materials.add(material);
+    }
+  });
+
+  for (const material of materials) {
+    resources.add(material);
+    collectMaterialTextures(material, textures);
+  }
+  for (const texture of textures) {
+    resources.add(texture);
+    collectImageIdentities(texture.image, resources);
+    collectImageIdentities(texture.source.data, resources);
+  }
+  return resources;
+}
+
+function collectImageIdentities(value: unknown, resources: Set<object>): void {
+  if (Array.isArray(value)) {
+    for (const image of value) collectImageIdentities(image, resources);
+    return;
+  }
+  if (typeof value === "object" && value !== null) resources.add(value);
 }
 
 function asMaterials(value: unknown): THREE.Material[] {

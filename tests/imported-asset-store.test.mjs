@@ -89,6 +89,34 @@ describe("ImportedAssetStore", () => {
     );
     store.dispose();
   });
+
+  it("rejects resources shared across independently owned assets", () => {
+    const store = new ImportedAssetStore();
+    const image = trackClose();
+    const texture = new THREE.Texture(image);
+    const firstMaterial = new THREE.MeshStandardMaterial({ map: texture });
+    const secondMaterial = new THREE.MeshStandardMaterial({ map: texture });
+    const firstRoot = new THREE.Group();
+    const secondRoot = new THREE.Group();
+    firstRoot.add(
+      new THREE.Mesh(new THREE.BoxGeometry(), firstMaterial),
+    );
+    secondRoot.add(
+      new THREE.Mesh(new THREE.SphereGeometry(), secondMaterial),
+    );
+    const textureDisposal = trackDisposal(texture);
+
+    store.register("asset-01", firstRoot);
+    assert.throws(
+      () => store.register("asset-02", secondRoot),
+      /must not share geometry, material, texture, or image resources/,
+    );
+    assert.equal(store.size, 1);
+
+    store.dispose();
+    assert.equal(textureDisposal.count, 1);
+    assert.equal(image.count, 1);
+  });
 });
 
 function trackDisposal(resource) {

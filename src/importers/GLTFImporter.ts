@@ -16,6 +16,7 @@ export class GLTFImporter extends BaseImporter {
     options: ImportOptions,
   ): Promise<ImportedModel> {
     this.assertNotAborted(options);
+    this.assertWithinMainThreadBudget(allFiles);
     const resolver = new LocalResourceResolver(allFiles, primary);
     const loader = new GLTFLoader(resolver.manager);
 

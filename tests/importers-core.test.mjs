@@ -91,6 +91,30 @@ describe("ImportManager and importer registry", () => {
     );
   });
 
+  it("respects an importer's file-level rejection", async () => {
+    let importCalls = 0;
+    const manager = new ImportManager([{
+      id: "sniffed",
+      name: "Sniffed",
+      extensions: ["foo"],
+      experimental: false,
+      canImport: () => false,
+      import: async () => {
+        importCalls += 1;
+        throw new Error("must not run");
+      },
+    }]);
+    const candidate = file("shape.foo");
+
+    assert.equal(manager.findImporter(candidate), undefined);
+    assert.equal(manager.canImport(candidate), false);
+    await assert.rejects(
+      manager.import(candidate),
+      /Unsupported model format: \.foo/u,
+    );
+    assert.equal(importCalls, 0);
+  });
+
   it("reports unsupported and extensionless files clearly", async () => {
     const manager = new ImportManager();
 
@@ -227,11 +251,15 @@ describe("LocalResourceResolver", () => {
   it("resolves primary-relative resources, caches URLs, and revokes them", () => {
     const primary = file("model.gltf", "{}");
     const sidecar = file("Albedo Map.bin", "data");
+    const ambiguousBasename = file("Albedo Map.bin", "other");
     Object.defineProperty(primary, "webkitRelativePath", {
-      value: "root/model.gltf",
+      value: "root/models/model.gltf",
     });
     Object.defineProperty(sidecar, "webkitRelativePath", {
       value: "root/textures/Albedo Map.bin",
+    });
+    Object.defineProperty(ambiguousBasename, "webkitRelativePath", {
+      value: "root/other/Albedo Map.bin",
     });
 
     const created = [];
@@ -246,15 +274,15 @@ describe("LocalResourceResolver", () => {
 
     try {
       const resolver = new LocalResourceResolver(
-        [primary, sidecar],
+        [primary, sidecar, ambiguousBasename],
         primary,
       );
       assert.equal(
-        resolver.resolve("textures/Albedo%20Map.bin?cache=1#buffer"),
+        resolver.resolve("../textures/Albedo%20Map.bin?cache=1#buffer"),
         "blob:test-1",
       );
       assert.equal(
-        resolver.resolve("TEXTURES/albedo%20map.bin"),
+        resolver.resolve("../TEXTURES/albedo%20map.bin"),
         "blob:test-1",
       );
       assert.deepEqual(created, [sidecar]);
@@ -266,17 +294,42 @@ describe("LocalResourceResolver", () => {
       URL.revokeObjectURL = originalRevokeObjectURL;
     }
   });
-  it("allows embedded data URIs and blocks network resources", () => {
+  it("allows embedded URIs and blocks external or missing resources", () => {
     const resolver = new LocalResourceResolver([]);
     const dataUri = "data:application/octet-stream;base64,AA==";
+    const blobUri = "blob:https://app.example/generated";
+    const uncUri = "\\\\evil.example\\mesh.bin";
 
     assert.equal(resolver.resolve(dataUri), dataUri);
+    assert.equal(resolver.resolve(blobUri), blobUri);
     assert.throws(
       () => resolver.resolve("https://example.com/mesh.bin"),
       /External model resources are not loaded/,
     );
+    assert.throws(
+      () => resolver.resolve(uncUri),
+      /External model resources are not loaded/,
+    );
+    assert.throws(
+      () => resolver.resolve("missing.bin"),
+      /Referenced local model resource was not selected/,
+    );
     assert.deepEqual(resolver.unresolvedResources, [
       "https://example.com/mesh.bin",
+      uncUri,
+      "missing.bin",
     ]);
+  });
+
+  it("rejects ambiguous local files instead of choosing the last one", () => {
+    const resolver = new LocalResourceResolver([
+      file("duplicate.bin", "first"),
+      file("duplicate.bin", "second"),
+    ]);
+
+    assert.throws(
+      () => resolver.resolve("duplicate.bin"),
+      /Ambiguous local model resource/,
+    );
   });
 });

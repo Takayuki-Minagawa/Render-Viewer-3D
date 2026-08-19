@@ -5,6 +5,7 @@ import type {
   TessellateOptions,
 } from "occt-wasm";
 import { BaseImporter } from "./BaseImporter";
+import { abortable } from "./abort";
 import type {
   ImportedModel,
   ImportOptions,
@@ -42,6 +43,8 @@ const QUALITY_OPTIONS: Readonly<
     relative: false,
   }),
 });
+const MAX_STEP_VERTEX_COUNT = 2_000_000;
+const MAX_STEP_TRIANGLE_COUNT = 2_000_000;
 
 export function stepTessellationOptions(
   quality: TriangulationQuality,
@@ -63,6 +66,16 @@ function geometryFromOcctMesh(mesh: OcctMesh): THREE.BufferGeometry {
   }
   if (mesh.indices.length === 0 || mesh.indices.length % 3 !== 0) {
     throw new Error("STEP tessellation produced invalid triangle indices.");
+  }
+  const vertexCount = mesh.positions.length / 3;
+  const triangleCount = mesh.indices.length / 3;
+  if (
+    vertexCount > MAX_STEP_VERTEX_COUNT ||
+    triangleCount > MAX_STEP_TRIANGLE_COUNT
+  ) {
+    throw new Error(
+      "STEP tessellation exceeds the main-thread geometry safety budget.",
+    );
   }
 
   const geometry = new THREE.BufferGeometry();
@@ -103,17 +116,45 @@ export class STEPImporter extends BaseImporter {
     const data = await primary.arrayBuffer();
     this.assertNotAborted(options);
 
-    const worker = await this.workerFactory();
+    let worker: STEPWorkerClient | undefined;
+    let terminatedWorker: STEPWorkerClient | undefined;
     let shape: ShapeHandle | undefined;
+    const terminateWorker = (
+      candidate: STEPWorkerClient | undefined = worker,
+    ): void => {
+      if (!candidate || terminatedWorker === candidate) return;
+      terminatedWorker = candidate;
+      candidate.terminate();
+    };
+    const spawnPromise = this.workerFactory();
 
     try {
+      worker = await abortable(
+        spawnPromise,
+        options.signal,
+        () => {
+          void spawnPromise.then(
+            (spawned) => terminateWorker(spawned),
+            () => undefined,
+          );
+        },
+      );
+      const activeWorker = worker;
       this.assertNotAborted(options);
-      shape = await worker.importStep(data);
+      shape = await abortable(
+        activeWorker.importStep(data),
+        options.signal,
+        () => terminateWorker(activeWorker),
+      );
       this.assertNotAborted(options);
 
-      const meshData = await worker.tessellate(
-        shape,
-        stepTessellationOptions(options.quality),
+      const meshData = await abortable(
+        activeWorker.tessellate(
+          shape,
+          stepTessellationOptions(options.quality),
+        ),
+        options.signal,
+        () => terminateWorker(activeWorker),
       );
       this.assertNotAborted(options);
 
@@ -145,12 +186,18 @@ export class STEPImporter extends BaseImporter {
         },
       );
     } finally {
-      try {
-        if (shape !== undefined) {
-          await worker.release(shape);
+      if (worker) {
+        try {
+          if (shape !== undefined && terminatedWorker !== worker) {
+            await abortable(
+              worker.release(shape),
+              options.signal,
+              () => terminateWorker(worker),
+            );
+          }
+        } finally {
+          terminateWorker(worker);
         }
-      } finally {
-        worker.terminate();
       }
     }
   }

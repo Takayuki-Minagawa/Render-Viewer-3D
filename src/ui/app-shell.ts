@@ -87,6 +87,25 @@ type ImportNotice =
   | { kind: "success"; fileNames: string }
   | { kind: "error"; detail: string };
 
+export type ImportActionResult =
+  | { kind: "success" }
+  | { kind: "error"; error: unknown }
+  | { kind: "disposed" };
+
+export async function runImportActionSafely(
+  action: () => Promise<void>,
+  isActive: () => boolean,
+): Promise<ImportActionResult> {
+  try {
+    await action();
+    return isActive() ? { kind: "success" } : { kind: "disposed" };
+  } catch (error) {
+    return isActive()
+      ? { kind: "error", error }
+      : { kind: "disposed" };
+  }
+}
+
 const GEOMETRY_TYPES = new Set<GeometryModel["type"]>([
   "box",
   "sphere",
@@ -155,6 +174,7 @@ export class AppShell {
   #preferences: AppPreferences;
   #status: UiStatus = "initializing";
   #importBusy = false;
+  #disposed = false;
   #importNotice: ImportNotice = { kind: "idle" };
   #model: SceneSnapshot | undefined;
   #editorState: EditorState = DEFAULT_EDITOR_STATE;
@@ -279,6 +299,7 @@ export class AppShell {
   }
 
   dispose(): void {
+    this.#disposed = true;
     this.#abortController.abort();
     this.#root.replaceChildren();
   }
@@ -687,22 +708,32 @@ export class AppShell {
   }
 
   async #runImport(files: readonly File[], actions: AppActions): Promise<void> {
-    if (this.#importBusy || files.length === 0) return;
+    if (this.#disposed || this.#importBusy || files.length === 0) return;
     const fileNames = this.#summarizeFileNames(files);
     this.#importBusy = true;
     this.#importNotice = { kind: "busy", fileNames };
     this.#setImportControlsDisabled(true);
     this.#renderImportNotice();
     try {
-      await actions.importFiles(files, this.#readImportOptions());
-      this.#importNotice = { kind: "success", fileNames };
-    } catch (error) {
-      console.error("Model import failed.", error);
-      this.#importNotice = { kind: "error", detail: importErrorDetail(error) };
+      const result = await runImportActionSafely(
+        () => actions.importFiles(files, this.#readImportOptions()),
+        () => !this.#disposed,
+      );
+      if (result.kind === "success") {
+        this.#importNotice = { kind: "success", fileNames };
+      } else if (result.kind === "error") {
+        console.error("Model import failed.", result.error);
+        this.#importNotice = {
+          kind: "error",
+          detail: importErrorDetail(result.error),
+        };
+      }
     } finally {
       this.#importBusy = false;
-      this.#setImportControlsDisabled(false);
-      this.#renderImportNotice();
+      if (!this.#disposed) {
+        this.#setImportControlsDisabled(false);
+        this.#renderImportNotice();
+      }
     }
   }
 

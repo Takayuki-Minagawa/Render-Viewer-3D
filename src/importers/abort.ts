@@ -19,10 +19,20 @@ export async function abortable<T>(
     return operation;
   }
 
-  throwIfImportAborted(signal);
+  if (signal.aborted) {
+    onAbort?.();
+    throwIfImportAborted(signal);
+  }
 
   return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      signal.removeEventListener("abort", handleAbort);
+    };
     const handleAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       onAbort?.();
       reject(
         signal.reason ??
@@ -31,13 +41,19 @@ export async function abortable<T>(
     };
 
     signal.addEventListener("abort", handleAbort, { once: true });
+    if (signal.aborted) handleAbort();
+
     operation.then(
       (value) => {
-        signal.removeEventListener("abort", handleAbort);
+        if (settled) return;
+        settled = true;
+        cleanup();
         resolve(value);
       },
       (error: unknown) => {
-        signal.removeEventListener("abort", handleAbort);
+        if (settled) return;
+        settled = true;
+        cleanup();
         reject(error);
       },
     );

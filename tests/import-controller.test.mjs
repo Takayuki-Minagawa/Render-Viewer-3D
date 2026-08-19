@@ -138,6 +138,43 @@ describe("ImportController", () => {
     assert.equal(assets.deleted.length, 1);
     assert.equal(assets.registered.size, 0);
   });
+
+  it("rolls back a completed import when disposal aborts before publication", async () => {
+    const reason = new Error("application disposed");
+    const signal = new AbortController();
+    const root = createImportedRoot();
+    const assets = createAssetStoreDouble();
+    const sceneStore = createSceneStoreDouble();
+    const selected = [];
+    const controller = new ImportController(
+      {
+        canImport: () => true,
+        import: async () => {
+          signal.abort(reason);
+          return {
+            root,
+            metadata: { fileName: "late.foo", format: "FOO" },
+            warnings: [],
+          };
+        },
+      },
+      assets,
+      sceneStore,
+      { setSelectedObjectId: (id) => selected.push(id) },
+      { fitToObject: () => true },
+    );
+
+    await assert.rejects(
+      controller.importFiles(
+        [new File(["late"], "late.foo")],
+        { ...defaultOptions(), signal: signal.signal },
+      ),
+      (error) => error === reason,
+    );
+    assert.equal(assets.registered.size, 0);
+    assert.deepEqual(sceneStore.snapshot.imports, []);
+    assert.deepEqual(selected, []);
+  });
 });
 
 describe("buildImportedHierarchy", () => {
@@ -150,6 +187,34 @@ describe("buildImportedHierarchy", () => {
     );
     assert.equal(hierarchy.nodes[0].children[0].id, "node-0-0");
     assert.equal(hierarchy.nodes[0].children[0].triangleCount, 1);
+  });
+
+  it("stops reading wide sibling arrays at the hierarchy budget", () => {
+    const children = Array.from({ length: 10_005 }, (_, index) => ({
+      name: `Node ${index}`,
+      type: "Group",
+      children: [],
+    }));
+    let indexedReads = 0;
+    const proxiedChildren = new Proxy(children, {
+      get(target, property, receiver) {
+        if (
+          typeof property === "string" &&
+          /^\d+$/u.test(property)
+        ) {
+          indexedReads += 1;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const hierarchy = buildImportedHierarchy({
+      children: proxiedChildren,
+    });
+
+    assert.equal(hierarchy.truncated, true);
+    assert.equal(hierarchy.nodes.length, 10_000);
+    assert.equal(indexedReads, 10_000);
   });
 });
 

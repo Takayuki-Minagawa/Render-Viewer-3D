@@ -34,6 +34,9 @@ interface SceneAdapterOptions {
   ) => void;
 }
 
+const DEFAULT_MIN_DISTANCE = 2.5;
+const DEFAULT_MAX_DISTANCE = 45;
+
 export class SceneAdapter {
   readonly #scene = new THREE.Scene();
   readonly #camera: THREE.PerspectiveCamera;
@@ -101,6 +104,11 @@ export class SceneAdapter {
 
   setSelection(objectId: string | null): void {
     this.#interaction.setSelection(objectId);
+  }
+
+  resetCameraConstraints(): void {
+    this.#controls.minDistance = DEFAULT_MIN_DISTANCE;
+    this.#controls.maxDistance = DEFAULT_MAX_DISTANCE;
   }
 
   setTransformMode(mode: TransformMode): void {
@@ -189,8 +197,8 @@ export class SceneAdapter {
     const controls = new OrbitControls(this.#camera, this.#renderer.domElement);
     controls.target.set(model.target.x, model.target.y, model.target.z);
     controls.enableDamping = false;
-    controls.minDistance = 2.5;
-    controls.maxDistance = 45;
+    controls.minDistance = DEFAULT_MIN_DISTANCE;
+    controls.maxDistance = DEFAULT_MAX_DISTANCE;
     controls.maxPolarAngle = Math.PI * 0.495;
     controls.screenSpacePanning = true;
     controls.addEventListener("end", () => {

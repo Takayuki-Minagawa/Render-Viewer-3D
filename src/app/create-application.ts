@@ -119,6 +119,7 @@ export function createApplication(root: HTMLElement): Application {
         });
       },
       resetCamera: () => {
+        adapter.resetCameraConstraints();
         const defaultCamera = createDefaultSceneModel().camera;
         store.update((draft) => {
           draft.camera = defaultCamera;

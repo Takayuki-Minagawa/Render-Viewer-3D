@@ -129,6 +129,53 @@ const MATERIAL_STATUS_LABELS = {
   stored: "material.supportStored",
 } as const satisfies Record<string, MessageKey>;
 
+interface TreeRootControl {
+  readonly row: HTMLElement;
+  readonly select: HTMLButtonElement;
+}
+
+export function createObjectTreeRenderKey(
+  objects: SceneSnapshot["objects"],
+  imports: SceneSnapshot["imports"],
+  locale: AppLocale,
+): string {
+  return JSON.stringify([
+    locale,
+    objects.map((object) => [
+      object.id,
+      object.name,
+      object.visible,
+      object.geometry.type,
+    ]),
+    imports.map((imported) => [
+      // Asset identity and immutable summaries act as the hierarchy revision;
+      // serializing up to 10,000 recursive nodes on every snapshot would defeat the cache.
+      imported.assetId,
+      imported.id,
+      imported.name,
+      imported.visible,
+      imported.format,
+      imported.metadata.objectCount,
+      imported.metadata.triangleCount,
+      imported.hierarchy.length,
+    ]),
+  ]);
+}
+
+export function createImportedInspectorBuildKey(
+  imported: SceneSnapshot["imports"][number],
+  materials: SceneSnapshot["materials"],
+  locale: AppLocale,
+): string {
+  return JSON.stringify([
+    imported.id,
+    locale,
+    imported.metadata,
+    imported.warnings,
+    materials.map(({ id, name }) => [id, name]),
+  ]);
+}
+
 export class SceneEditorView {
   readonly #root: HTMLElement;
   readonly #objectList: HTMLElement;
@@ -139,6 +186,8 @@ export class SceneEditorView {
   readonly #inspectorTitle: HTMLElement;
   readonly #inspectorBody: HTMLElement;
   readonly #inspectorBadge: HTMLElement;
+  readonly #treeRootControls = new Map<string, TreeRootControl>();
+  #renderedTreeKey: string | null = null;
   #renderedObjectId: string | null | undefined;
   #renderedGeometryType: GeometryModel["type"] | null = null;
   #renderedMaterialId: string | null = null;
@@ -174,23 +223,30 @@ export class SceneEditorView {
 
     this.#objectCount.textContent = String(model.objects.length + model.imports.length);
     this.#lightCount.textContent = String(model.lights.length);
-    this.#renderObjects(
+    const treeKey = createObjectTreeRenderKey(
       model.objects,
       model.imports,
-      editorState.selectedObjectId,
       locale,
     );
+    if (treeKey !== this.#renderedTreeKey) {
+      this.#renderObjects(
+        model.objects,
+        model.imports,
+        editorState.selectedObjectId,
+        locale,
+      );
+      this.#renderedTreeKey = treeKey;
+    }
+    this.#syncObjectTreeSelection(editorState.selectedObjectId);
     this.#renderLights(model.lights, locale);
     this.#renderCamera(model, locale);
 
     if (selectedImport) {
-      const importKey = [
-        selectedImport.id,
-        selectedImport.materialMode,
-        selectedImport.customMaterialId ?? "",
+      const importKey = createImportedInspectorBuildKey(
+        selectedImport,
+        model.materials,
         locale,
-        ...model.materials.map(({ id, name }) => `${id}:${name}`),
-      ].join("|");
+      );
       if (this.#renderedImportKey !== importKey) {
         this.#buildImportedInspector(
           selectedImport,
@@ -248,6 +304,7 @@ export class SceneEditorView {
     locale: AppLocale,
   ): void {
     const fragment = document.createDocumentFragment();
+    this.#treeRootControls.clear();
     if (objects.length === 0 && imports.length === 0) {
       const empty = document.createElement("p");
       empty.className = "tree-empty";
@@ -298,6 +355,7 @@ export class SceneEditorView {
       dot.classList.toggle("is-off", !object.visible);
       visibility.append(dot);
       row.append(select, visibility);
+      this.#treeRootControls.set(object.id, { row, select });
       fragment.append(row);
     }
     for (const imported of imports) {
@@ -346,6 +404,7 @@ export class SceneEditorView {
       dot.classList.toggle("is-off", !imported.visible);
       visibility.append(dot);
       row.append(select, visibility);
+      this.#treeRootControls.set(imported.id, { row, select });
       fragment.append(row);
       this.#appendImportedNodes(
         fragment,
@@ -356,6 +415,14 @@ export class SceneEditorView {
       );
     }
     this.#objectList.replaceChildren(fragment);
+  }
+
+  #syncObjectTreeSelection(selectedObjectId: string | null): void {
+    for (const [id, control] of this.#treeRootControls) {
+      const selected = id === selectedObjectId;
+      control.row.classList.toggle("is-selected", selected);
+      control.select.setAttribute("aria-pressed", String(selected));
+    }
   }
 
   #appendImportedNodes(
@@ -374,7 +441,6 @@ export class SceneEditorView {
       select.type = "button";
       select.className = "tree-select";
       select.dataset.objectSelect = imported.id;
-      select.setAttribute("aria-pressed", "false");
       select.setAttribute(
         "aria-label",
         `${translate(locale, "scene.selectImportedRoot")}: ${imported.name} / ${node.name}`,

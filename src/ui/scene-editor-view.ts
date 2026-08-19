@@ -206,7 +206,7 @@ export class SceneEditorView {
       select.type = "button";
       select.className = "tree-select";
       select.dataset.objectSelect = object.id;
-      select.setAttribute("aria-selected", String(object.id === selectedObjectId));
+      select.setAttribute("aria-pressed", String(object.id === selectedObjectId));
       select.setAttribute(
         "aria-label",
         `${translate(locale, "scene.selectObject")}: ${object.name}`,

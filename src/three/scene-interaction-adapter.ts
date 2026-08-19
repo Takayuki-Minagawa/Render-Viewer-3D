@@ -11,12 +11,21 @@ interface SceneInteractionOptions {
     objectId: string,
     transform: TransformModel,
   ) => void;
+  createTransformControls?: (
+    camera: THREE.Camera,
+    canvas: HTMLCanvasElement,
+  ) => TransformControls;
 }
 
 interface PointerStart {
   id: number;
   x: number;
   y: number;
+}
+
+interface PendingTransform {
+  readonly objectId: string;
+  readonly transform: TransformModel;
 }
 
 export class SceneInteractionAdapter {
@@ -37,6 +46,7 @@ export class SceneInteractionAdapter {
   readonly #abortController = new AbortController();
   #selectedObjectId: string | null = null;
   #pointerStart: PointerStart | null = null;
+  #pendingTransform: PendingTransform | null = null;
   #draggedTransform = false;
   #orbitEnabledBeforeTransform: boolean | null = null;
 
@@ -54,7 +64,9 @@ export class SceneInteractionAdapter {
     this.#graph = graph;
     this.#orbitControls = orbitControls;
     this.#options = options;
-    this.#transformControls = new TransformControls(camera, canvas);
+    this.#transformControls = options.createTransformControls
+      ? options.createTransformControls(camera, canvas)
+      : new TransformControls(camera, canvas);
     this.#transformHelper = this.#transformControls.getHelper();
     this.#selectionHelper.visible = false;
     this.#selectionHelper.material.depthTest = false;
@@ -68,8 +80,11 @@ export class SceneInteractionAdapter {
 
   setSelection(objectId: string | null): void {
     if (objectId !== this.#selectedObjectId && this.#transformControls.dragging) {
-      this.#commitTransform();
-      this.#endTransformInteraction();
+      try {
+        this.#commitTransform();
+      } finally {
+        this.#endTransformInteraction();
+      }
     }
     this.#selectedObjectId = objectId;
     this.refreshSelection();
@@ -77,18 +92,38 @@ export class SceneInteractionAdapter {
 
   setTransformMode(mode: TransformMode): void {
     if (mode !== this.#transformControls.mode && this.#transformControls.dragging) {
-      this.#commitTransform();
-      this.#endTransformInteraction();
+      try {
+        this.#commitTransform();
+      } finally {
+        this.#endTransformInteraction();
+      }
     }
     this.#transformControls.setMode(mode);
   }
 
   refreshSelection(): void {
-    const object = this.#selectedObjectId
-      ? this.#graph.getObjectById(this.#selectedObjectId)
-      : undefined;
+    const objectId = this.#selectedObjectId;
+    const object = objectId ? this.#graph.getObjectById(objectId) : undefined;
 
-    if (!object || !object.visible) {
+    if (!objectId || !object) {
+      this.#endTransformInteraction();
+      this.#transformControls.detach();
+      this.#selectionHelper.visible = false;
+      return;
+    }
+
+    if (!object.visible) {
+      if (
+        this.#transformControls.dragging &&
+        this.#pendingTransform?.objectId === objectId
+      ) {
+        // Keep the model-shaped draft until the active pointer finishes. A
+        // synchronous commit here would re-enter the SceneStore notification.
+        this.#transformControls.detach();
+        this.#selectionHelper.visible = false;
+        return;
+      }
+
       this.#endTransformInteraction();
       this.#transformControls.detach();
       this.#selectionHelper.visible = false;
@@ -98,6 +133,7 @@ export class SceneInteractionAdapter {
     if (this.#transformControls.object !== object) {
       this.#transformControls.attach(object);
     }
+    this.#restorePendingTransform(objectId, object);
     this.#selectionHelper.setFromObject(object);
     this.#selectionHelper.visible = true;
   }
@@ -135,14 +171,18 @@ export class SceneInteractionAdapter {
       () => {
         this.#pointerStart = null;
         this.#draggedTransform = false;
-        if (!this.#transformControls.dragging) return;
+        const hadTransformTransaction =
+          this.#transformControls.dragging || this.#pendingTransform !== null;
 
-        this.#commitTransform();
-        this.#endTransformInteraction();
-        // TransformControls does not listen for pointercancel. Reconnecting
-        // clears the pointermove handler it installs only while dragging.
-        this.#transformControls.disconnect();
-        this.#transformControls.connect(this.#canvas);
+        try {
+          if (hadTransformTransaction) this.#commitTransform();
+        } finally {
+          if (hadTransformTransaction) this.#endTransformInteraction();
+          // TransformControls does not listen for pointercancel. Reconnecting
+          // clears the pointermove handler it installs only while dragging.
+          this.#transformControls.disconnect();
+          this.#transformControls.connect(this.#canvas);
+        }
       },
       options,
     );
@@ -155,23 +195,27 @@ export class SceneInteractionAdapter {
         }
         this.#orbitControls.enabled = false;
         this.#draggedTransform = true;
+        this.#rememberPendingTransform();
         return;
       }
       this.#restoreOrbitControls();
     });
     this.#transformControls.addEventListener("objectChange", () => {
       const object = this.#transformControls.object;
-      if (object) this.#selectionHelper.setFromObject(object);
+      if (!object) return;
+      this.#rememberPendingTransform();
+      this.#selectionHelper.setFromObject(object);
     });
     this.#transformControls.addEventListener("mouseUp", () => {
       this.#commitTransform();
     });
   }
 
-  #commitTransform(): void {
+  #rememberPendingTransform(): void {
     const objectId = this.#selectedObjectId;
     const object = this.#transformControls.object;
     if (
+      !this.#transformControls.dragging ||
       !objectId ||
       !object ||
       this.#graph.getObjectById(objectId) !== object
@@ -179,10 +223,54 @@ export class SceneInteractionAdapter {
       return;
     }
 
-    this.#options.onObjectTransformCommitted(
+    this.#pendingTransform = {
       objectId,
-      this.#toTransformModel(object),
+      transform: this.#captureTransformModel(object),
+    };
+  }
+
+  #restorePendingTransform(objectId: string, object: THREE.Object3D): void {
+    const pending = this.#pendingTransform;
+    if (!pending || pending.objectId !== objectId) return;
+
+    const { position, rotationDegrees, scale } = pending.transform;
+    object.position.set(position.x, position.y, position.z);
+    object.rotation.set(
+      THREE.MathUtils.degToRad(rotationDegrees.x),
+      THREE.MathUtils.degToRad(rotationDegrees.y),
+      THREE.MathUtils.degToRad(rotationDegrees.z),
     );
+    object.scale.set(scale.x, scale.y, scale.z);
+    object.updateMatrixWorld(true);
+  }
+
+  #commitTransform(): void {
+    const objectId = this.#selectedObjectId;
+    const graphObject = objectId
+      ? this.#graph.getObjectById(objectId)
+      : undefined;
+    const controlsObject = this.#transformControls.object;
+    if (!objectId || !graphObject) return;
+
+    const previousPending = this.#pendingTransform;
+    let source: TransformModel;
+    if (previousPending?.objectId === objectId) {
+      source = previousPending.transform;
+    } else if (controlsObject === graphObject) {
+      source = this.#captureTransformModel(graphObject);
+    } else {
+      return;
+    }
+
+    const transform = this.#roundTransformModel(source);
+    this.#pendingTransform = null;
+
+    try {
+      this.#options.onObjectTransformCommitted(objectId, transform);
+    } catch (error) {
+      this.#pendingTransform = previousPending;
+      throw error;
+    }
   }
 
   #endTransformInteraction(): void {
@@ -190,6 +278,7 @@ export class SceneInteractionAdapter {
       this.#transformControls.dragging = false;
       this.#transformControls.axis = null;
     }
+    this.#pendingTransform = null;
     this.#restoreOrbitControls();
   }
 
@@ -206,6 +295,13 @@ export class SceneInteractionAdapter {
 
     if (this.#draggedTransform) {
       this.#draggedTransform = false;
+      if (this.#pendingTransform) {
+        try {
+          this.#commitTransform();
+        } finally {
+          this.#endTransformInteraction();
+        }
+      }
       return;
     }
     if (this.#transformControls.axis !== null) return;
@@ -229,22 +325,42 @@ export class SceneInteractionAdapter {
     );
   }
 
-  #toTransformModel(object: THREE.Object3D): TransformModel {
+  #captureTransformModel(object: THREE.Object3D): TransformModel {
     return {
       position: {
-        x: this.#round(object.position.x),
-        y: this.#round(object.position.y),
-        z: this.#round(object.position.z),
+        x: object.position.x,
+        y: object.position.y,
+        z: object.position.z,
       },
       rotationDegrees: {
-        x: this.#round(THREE.MathUtils.radToDeg(object.rotation.x)),
-        y: this.#round(THREE.MathUtils.radToDeg(object.rotation.y)),
-        z: this.#round(THREE.MathUtils.radToDeg(object.rotation.z)),
+        x: THREE.MathUtils.radToDeg(object.rotation.x),
+        y: THREE.MathUtils.radToDeg(object.rotation.y),
+        z: THREE.MathUtils.radToDeg(object.rotation.z),
       },
       scale: {
-        x: this.#round(object.scale.x),
-        y: this.#round(object.scale.y),
-        z: this.#round(object.scale.z),
+        x: object.scale.x,
+        y: object.scale.y,
+        z: object.scale.z,
+      },
+    };
+  }
+
+  #roundTransformModel(transform: TransformModel): TransformModel {
+    return {
+      position: {
+        x: this.#round(transform.position.x),
+        y: this.#round(transform.position.y),
+        z: this.#round(transform.position.z),
+      },
+      rotationDegrees: {
+        x: this.#round(transform.rotationDegrees.x),
+        y: this.#round(transform.rotationDegrees.y),
+        z: this.#round(transform.rotationDegrees.z),
+      },
+      scale: {
+        x: this.#round(transform.scale.x),
+        y: this.#round(transform.scale.y),
+        z: this.#round(transform.scale.z),
       },
     };
   }

@@ -342,7 +342,7 @@ export class AppShell {
     return (
       target instanceof Element &&
       target.closest(
-        "input, textarea, select, button, a, summary, [contenteditable='true']",
+        "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
       ) !== null
     );
   }

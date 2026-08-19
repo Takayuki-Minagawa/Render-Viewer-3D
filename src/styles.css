@@ -13,7 +13,7 @@
   --border-strong: #3b485c;
   --text: #f3f6fb;
   --text-muted: #9ba8ba;
-  --text-faint: #69778b;
+  --text-faint: #76869d;
   --accent: #5f8cff;
   --accent-soft: rgba(95, 140, 255, 0.14);
   --accent-border: rgba(95, 140, 255, 0.48);
@@ -34,7 +34,7 @@
   --border-strong: #aebaca;
   --text: #172131;
   --text-muted: #536276;
-  --text-faint: #7b899b;
+  --text-faint: #586679;
   --accent: #356ee8;
   --accent-soft: rgba(53, 110, 232, 0.11);
   --accent-border: rgba(53, 110, 232, 0.42);
@@ -736,7 +736,11 @@ button {
   display: block;
   width: 100%;
   height: 100%;
-  outline: none;
+}
+
+.viewport-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
 }
 
 .loading-state {
@@ -1210,7 +1214,7 @@ input:focus {
   }
 }
 
-@media (max-width: 840px) {
+@media (max-width: 900px) {
   body {
     overflow: auto;
   }

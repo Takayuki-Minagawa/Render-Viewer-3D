@@ -22,7 +22,9 @@ const UNKNOWN_POV_RAY_CAPABILITY: MaterialCapability = Object.freeze({
 
 export function getMaterialCapability(path: string): MaterialCapability {
   const normalizedPath = path.replace(/\.\d+(?=\.|$)/g, "");
-  const capability = findBestCapability(normalizedPath);
+  const candidatePaths =
+    normalizedPath === path ? [path] : [path, normalizedPath];
+  const capability = findBestCapability(candidatePaths);
   if (!capability) return UNKNOWN_POV_RAY_CAPABILITY;
 
   return {
@@ -37,9 +39,13 @@ export function getMaterialCapability(path: string): MaterialCapability {
 }
 
 function findBestCapability(
-  path: string,
+  paths: readonly string[],
 ): MaterialCapabilitySnapshot | undefined {
-  if (path.includes(".extensions") || path.endsWith(".raw")) {
+  if (
+    paths.some(
+      (path) => path.includes(".extensions") || path.endsWith(".raw"),
+    )
+  ) {
     return MODEL_MATERIAL_CAPABILITIES.find(
       (capability) => capability.id === "pov.extensions",
     );
@@ -48,7 +54,7 @@ function findBestCapability(
   let best: MaterialCapabilitySnapshot | undefined;
   let bestSpecificity = -1;
   for (const capability of MODEL_MATERIAL_CAPABILITIES) {
-    if (!matchesCapabilityPath(capability.path, path)) continue;
+    if (!matchesCapabilityPath(capability.path, paths)) continue;
     const specificity = capability.path.replaceAll("*", "").length;
     if (specificity <= bestSpecificity) continue;
     best = capability;
@@ -57,12 +63,16 @@ function findBestCapability(
   return best;
 }
 
-function matchesCapabilityPath(pattern: string, path: string): boolean {
+function matchesCapabilityPath(
+  pattern: string,
+  paths: readonly string[],
+): boolean {
   const expression = pattern
     .split("*")
     .map(escapeRegularExpression)
     .join("[^.]*");
-  return new RegExp(`^${expression}(?:\\..+)?$`).test(path);
+  const matcher = new RegExp(`^${expression}(?:\\..+)?$`);
+  return paths.some((path) => matcher.test(path));
 }
 
 function escapeRegularExpression(value: string): string {

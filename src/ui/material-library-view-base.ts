@@ -2,6 +2,7 @@ import "./material-library-layout.css";
 import {
   createMaterialDetailRenderKey,
   materialKindMessageKey,
+  resolveMaterialSelectionAfterAssignmentChange,
   resolveMaterialTabKey,
 } from "./material-detail-state";
 import { MATERIAL_CAPABILITIES } from "../model/material/material-capabilities";
@@ -60,6 +61,7 @@ interface MaterialListViewItem extends MaterialLibraryItem {
 type MaterialRenderFocus =
   | { readonly kind: "list"; readonly materialId: string }
   | { readonly kind: "assign" }
+  | { readonly kind: "makeUnique" }
   | { readonly kind: "delete" };
 
 const MATERIAL_TAB_PANEL_ID = "material-editor-panel";
@@ -123,6 +125,8 @@ export class MaterialLibraryView {
     locale: AppLocale,
   ): void {
     const renderFocus = this.#captureRenderFocus();
+    const previousObjectId = this.#selectedObjectId;
+    const previousAssignedMaterialId = this.#selectedObject()?.materialId ?? null;
     const localeChanged = locale !== this.#locale;
     const objectChanged = selectedObjectId !== this.#selectedObjectId;
     this.#materials = materials;
@@ -130,6 +134,14 @@ export class MaterialLibraryView {
     this.#selectedObjectId = selectedObjectId;
     this.#locale = locale;
     const assigned = this.#selectedObject()?.materialId ?? null;
+    this.#selectedMaterialId = resolveMaterialSelectionAfterAssignmentChange({
+      dialogOpen: this.#dialog.open,
+      currentMaterialId: this.#selectedMaterialId,
+      previousObjectId,
+      nextObjectId: selectedObjectId,
+      previousAssignedMaterialId,
+      nextAssignedMaterialId: assigned,
+    });
     if (
       !materials.some((material) => material.id === this.#selectedMaterialId) ||
       (!this.#dialog.open && objectChanged)
@@ -144,7 +156,12 @@ export class MaterialLibraryView {
     this.#restoreRenderFocus(renderFocus);
   }
 
-  open(materialId?: string): void {
+  open(materialId?: string, revealMaterial = false): void {
+    if (revealMaterial) {
+      this.#filters = { ...DEFAULT_MATERIAL_LIBRARY_FILTERS };
+      this.#query<HTMLInputElement>("[data-material-search]").value = "";
+      this.#categoryFilter.value = "all";
+    }
     if (materialId && this.#materials.some((item) => item.id === materialId)) {
       this.#selectedMaterialId = materialId;
     }
@@ -693,6 +710,7 @@ export class MaterialLibraryView {
     const materialId = active.dataset.materialSelect;
     if (materialId) return { kind: "list", materialId };
     if (active.dataset.assignMaterial) return { kind: "assign" };
+    if (active.dataset.makeMaterialUnique) return { kind: "makeUnique" };
     if (active.dataset.deleteMaterial) return { kind: "delete" };
     return undefined;
   }
@@ -711,6 +729,14 @@ export class MaterialLibraryView {
             ".material-detail-actions button:not(:disabled)",
           )
           ?.focus();
+        return;
+      }
+      if (focus.kind === "makeUnique") {
+        const rename = this.#detail.querySelector<HTMLInputElement>(
+          "[data-rename-material]",
+        );
+        if (rename) rename.focus();
+        else this.#focusDetailHeading();
         return;
       }
       if (window.matchMedia("(max-width: 600px)").matches) {

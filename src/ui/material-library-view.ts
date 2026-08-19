@@ -35,12 +35,18 @@ export class MaterialLibraryView extends MaterialLibraryViewBase {
     this.#hasRendered = true;
 
     if (addedMaterial && this.isOpen) {
-      super.open(addedMaterial.id);
-      queueMicrotask(() =>
-        this.#root
-          .querySelector<HTMLInputElement>("[data-rename-material]")
-          ?.focus(),
-      );
+      super.open(addedMaterial.id, true);
+      queueMicrotask(() => {
+        const rename = this.#root.querySelector<HTMLInputElement>(
+          "[data-rename-material]",
+        );
+        if (rename) rename.focus();
+        else {
+          this.#root
+            .querySelector<HTMLElement>("[data-material-detail-heading]")
+            ?.focus();
+        }
+      });
     }
   }
 }

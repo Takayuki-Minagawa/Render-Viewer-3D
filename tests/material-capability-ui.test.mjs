@@ -6,6 +6,7 @@ let server;
 let MATERIAL_CAPABILITIES;
 let createMaterialDefinition;
 let filterCapabilities;
+let getRuntimeMaterialCapability;
 let resolveCapabilityValue;
 let translate;
 
@@ -21,6 +22,8 @@ before(async () => {
   ({ createMaterialDefinition } = await server.ssrLoadModule(
     "/src/model/material/material-presets.ts",
   ));
+  ({ getMaterialCapability: getRuntimeMaterialCapability } =
+    await server.ssrLoadModule("/src/three/material/material-capabilities.ts"));
   ({ filterCapabilities, resolveCapabilityValue } = await server.ssrLoadModule(
     "/src/ui/material-library-view-base.ts",
   ));
@@ -86,6 +89,36 @@ describe("material capability catalog UI", () => {
     assert.equal(
       resolveCapabilityValue(material, "pov.texture.pigment.*Map"),
       undefined,
+    );
+  });
+});
+
+describe("runtime material capability resolution", () => {
+  it("matches indexed and recursive density paths to their specific capability IDs", () => {
+    assert.deepEqual(
+      getRuntimeMaterialCapability(
+        "pov.interior.media.0.density.0.colorMap.0.position",
+      ),
+      {
+        support: "stored-only",
+        code: "pov.media.density-color-map",
+      },
+    );
+    assert.deepEqual(
+      getRuntimeMaterialCapability(
+        "pov.interior.media.0.density.0.densityMap.0.value.pattern.type",
+      ),
+      {
+        support: "stored-only",
+        code: "pov.media.density-map",
+      },
+    );
+    assert.deepEqual(
+      getRuntimeMaterialCapability("pov.interior.media.0.absorption.red"),
+      {
+        support: "stored-only",
+        code: "pov.media.absorption",
+      },
     );
   });
 });

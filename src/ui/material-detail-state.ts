@@ -35,6 +35,38 @@ export function createMaterialDetailRenderKey(
   ]);
 }
 
+export interface MaterialAssignmentSelectionState {
+  readonly dialogOpen: boolean;
+  readonly currentMaterialId: string | null;
+  readonly previousObjectId: string | null;
+  readonly nextObjectId: string | null;
+  readonly previousAssignedMaterialId: string | null;
+  readonly nextAssignedMaterialId: string | null;
+}
+
+/**
+ * Follows a make-unique transition without hijacking ordinary assignment or
+ * a deliberate material selection. The selected object must be unchanged,
+ * and the library must still be showing the material that object used before
+ * the assignment changed.
+ */
+export function resolveMaterialSelectionAfterAssignmentChange(
+  state: MaterialAssignmentSelectionState,
+): string | null {
+  if (
+    state.dialogOpen &&
+    state.previousObjectId !== null &&
+    state.previousObjectId === state.nextObjectId &&
+    state.previousAssignedMaterialId !== null &&
+    state.nextAssignedMaterialId !== null &&
+    state.previousAssignedMaterialId !== state.nextAssignedMaterialId &&
+    state.currentMaterialId === state.previousAssignedMaterialId
+  ) {
+    return state.nextAssignedMaterialId;
+  }
+  return state.currentMaterialId;
+}
+
 export function materialKindMessageKey(
   presetId: string | null,
 ): Extract<MessageKey, "material.builtIn" | "material.custom"> {

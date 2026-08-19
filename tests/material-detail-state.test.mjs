@@ -5,6 +5,7 @@ import { createServer } from "vite";
 let server;
 let createMaterialDetailRenderKey;
 let materialKindMessageKey;
+let resolveMaterialSelectionAfterAssignmentChange;
 let resolveMaterialTabKey;
 
 before(async () => {
@@ -16,6 +17,7 @@ before(async () => {
   ({
     createMaterialDetailRenderKey,
     materialKindMessageKey,
+    resolveMaterialSelectionAfterAssignmentChange,
     resolveMaterialTabKey,
   } = await server.ssrLoadModule("/src/ui/material-detail-state.ts"));
 });
@@ -65,6 +67,49 @@ describe("material detail render state", () => {
   it("maps preset state to a badge without requiring DOM replacement", () => {
     assert.equal(materialKindMessageKey("glass"), "material.builtIn");
     assert.equal(materialKindMessageKey(null), "material.custom");
+  });
+
+  it("follows a make-unique assignment without hijacking other selection changes", () => {
+    const transition = {
+      dialogOpen: true,
+      currentMaterialId: "shared",
+      previousObjectId: "box",
+      nextObjectId: "box",
+      previousAssignedMaterialId: "shared",
+      nextAssignedMaterialId: "shared-copy",
+    };
+    assert.equal(
+      resolveMaterialSelectionAfterAssignmentChange(transition),
+      "shared-copy",
+    );
+    assert.equal(
+      resolveMaterialSelectionAfterAssignmentChange({
+        ...transition,
+        dialogOpen: false,
+      }),
+      "shared",
+    );
+    assert.equal(
+      resolveMaterialSelectionAfterAssignmentChange({
+        ...transition,
+        nextObjectId: "sphere",
+      }),
+      "shared",
+    );
+    assert.equal(
+      resolveMaterialSelectionAfterAssignmentChange({
+        ...transition,
+        currentMaterialId: "another-material",
+      }),
+      "another-material",
+    );
+    assert.equal(
+      resolveMaterialSelectionAfterAssignmentChange({
+        ...transition,
+        nextAssignedMaterialId: "shared",
+      }),
+      "shared",
+    );
   });
 });
 

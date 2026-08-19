@@ -1,9 +1,11 @@
 # Render Viewer 3D
 
-POV-Rayの明快なシーン構成と、GUIによるリアルタイム確認を組み合わせることを目指した、
-パラメータ駆動型の3Dシーン・ライティング確認ツールです。
+TypeScriptとThree.jsで構築した、ブラウザ上で3Dプリミティブを追加・編集・確認できる、
+パラメータ駆動型の3Dシーンエディターです。
 
-現在は仕様書の **Phase 2（オブジェクト編集）** まで実装しています。
+> A browser-based, parameter-driven 3D scene editor built with TypeScript and Three.js.
+
+現在は **Phase 2（オブジェクト編集）** まで実装しています。
 **Phase 3以降は未実装です。**
 
 ## 公開ページ
@@ -30,25 +32,33 @@ POV-Rayの明快なシーン構成と、GUIによるリアルタイム確認を�
 ### Phase 2（オブジェクト編集）
 
 - Box / Sphere / Cylinder / Cone / Plane / Torusの6種類のプリミティブ追加
-- Scene Treeでのオブジェクト選択、表示 / 非表示、追加、複製、削除、名前変更
-- InspectorでのTransform（位置・回転・スケール）とGeometryパラメータ編集
+- Scene Treeでのオブジェクト選択、表示 / 非表示、プリミティブ追加
+- Inspectorでの名前変更、複製、削除、Transform（位置・回転・スケール）とGeometryパラメータ編集
 - Viewportのraycastによる選択とTransformControlsによる直接操作
 - `W` / `E` / `R`による移動・回転・スケール切替
 - `Delete`による削除、`Ctrl+D` / `Cmd+D`による複製
 - 編集内容をSceneModelへ反映し、Three.js Sceneをモデルから同期する構成
 
-マテリアル編集、ライト編集、テクスチャ、PNG出力、JSON入出力、比較機能など、
-仕様書のPhase 3以降に該当する機能は未実装です。
+## 現在の制限
+
+- マテリアル編集、ライト編集、テクスチャ、PNG出力、JSON入出力、比較機能は未実装です。
+- シーンの保存・復元には未対応のため、ページを再読み込みすると編集内容は初期状態に戻ります。
+- 外部の3Dモデルやテクスチャの読み込みには対応していません。
 
 ## 表示と言語の設定
 
 ヘッダー右側のボタンから表示言語、テーマ、簡易マニュアルを操作できます。
 言語とテーマはブラウザ内に保存され、次回アクセス時に復元されます。初回の既定値は日本語・ダークテーマです。
-サーバーへの設定送信やCookieは使用しません。
+
+## プライバシーと外部通信
+
+- シーンの内容はブラウザのメモリ内で処理し、外部サーバーへ送信しません。
+- `localStorage`は表示言語とテーマの保存にだけ使用します。
+- Analytics、Cookie、外部API、外部CDNは使用していません。
 
 ## ローカル実行
 
-Node.js 22を推奨します（Vite 6の対応範囲はNode.js 18 / 20 / 22以上です）。
+Node.js 22を推奨します（対応範囲はNode.js 18 / 20 / 22以上です）。
 
 ```bash
 npm ci
@@ -66,7 +76,8 @@ npm run preview
 ```
 
 `npm test` はScene Storeの不変性、オブジェクト編集コマンド、Geometry生成、
-SceneModelからThree.js Sceneへの追加・削除・差し替えとリソース再利用を検証します。
+SceneModelからThree.js Sceneへの追加・削除・差し替え、リソース再利用、
+TransformControls操作中のモデル同期を検証します。
 `npm run build` はprebuildでTypeScriptの型検査を実行後、`dist/`へ静的ファイルを生成します。
 GitHub Pagesのプロジェクトパスに合わせ、Viteの`base`は`/Render-Viewer-3D/`です。
 
@@ -93,4 +104,7 @@ Three.jsリソースをreconcileします。
 
 ## ライセンス
 
-利用ライブラリは [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md) を参照してください。
+本リポジトリ固有のソースコードには、現時点でオープンソースライセンスを設定していません。
+Publicリポジトリとして閲覧できますが、オープンソースとしての利用許諾を示すものではありません。
+
+利用ライブラリのライセンスは [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md) を参照してください。

@@ -40,3 +40,15 @@ export function materialKindMessageKey(
 ): Extract<MessageKey, "material.builtIn" | "material.custom"> {
   return presetId ? "material.builtIn" : "material.custom";
 }
+
+export function resolveMaterialTabKey(
+  current: MaterialEditorTab,
+  key: string,
+): MaterialEditorTab | undefined {
+  if (key === "Home") return "basic";
+  if (key === "End") return "advanced";
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    return current === "basic" ? "advanced" : "basic";
+  }
+  return undefined;
+}

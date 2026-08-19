@@ -7,6 +7,7 @@ let server;
 let materialModel;
 let projectMaterial;
 let createMeshPhysicalMaterial;
+let applyMaterialProjection;
 let MaterialRuntimeCache;
 let SceneGraphAdapter;
 let createDefaultSceneObject;
@@ -18,7 +19,7 @@ before(async () => {
     server: { middlewareMode: true },
   });
   materialModel = await server.ssrLoadModule("/src/model/material/index.ts");
-  ({ projectMaterial, createMeshPhysicalMaterial } =
+  ({ projectMaterial, createMeshPhysicalMaterial, applyMaterialProjection } =
     await server.ssrLoadModule("/src/three/material/material-projector.ts"));
   ({ MaterialRuntimeCache } = await server.ssrLoadModule(
     "/src/three/material/material-runtime-cache.ts",
@@ -83,8 +84,7 @@ describe("Three.js material projection", () => {
 
     const projection = projectMaterial(definition);
     const rendered = createMeshPhysicalMaterial(projection);
-    const expectedColor = new THREE.Color(definition.preview.baseColor)
-      .multiplyScalar(definition.preview.diffuse);
+    const expectedColor = new THREE.Color(definition.preview.baseColor);
 
     assertColorEqual(rendered.color, expectedColor);
     assert.equal(rendered.metalness, 0.31);
@@ -156,6 +156,93 @@ describe("Three.js material projection", () => {
     );
 
     rendered.dispose();
+  });
+
+  it("scales only the reflected diffuse lobe without darkening glass or metal", () => {
+    const glassDefinition = materialModel.createMaterialDefinition(
+      "glass",
+      "Glass",
+      "glass",
+    );
+    const metalDefinition = materialModel.createMaterialDefinition(
+      "metal",
+      "Metal",
+      "metal",
+    );
+    const glass = createMeshPhysicalMaterial(projectMaterial(glassDefinition));
+    const metal = createMeshPhysicalMaterial(projectMaterial(metalDefinition));
+
+    assertColorEqual(
+      glass.color,
+      new THREE.Color(glassDefinition.preview.baseColor),
+    );
+    assert.equal(glass.transmission, 1);
+    assertColorEqual(
+      metal.color,
+      new THREE.Color(metalDefinition.preview.baseColor),
+    );
+    assert.equal(metal.metalness, 1);
+
+    const shader = {
+      uniforms: {},
+      fragmentShader: `
+void main() {
+  vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
+  #include <transmission_fragment>
+}
+`,
+    };
+    glass.onBeforeCompile(shader);
+    const uniform = shader.uniforms.uPreviewDiffuse;
+    assert.ok(uniform);
+    assert.equal(uniform.value, 0);
+    assert.equal(
+      glass.customProgramCacheKey(),
+      "render-viewer-3d-preview-diffuse-v1",
+    );
+    assert.equal(
+      countMatches(shader.fragmentShader, "uniform float uPreviewDiffuse;"),
+      1,
+    );
+    assert.equal(
+      countMatches(shader.fragmentShader, "totalDiffuse *= uPreviewDiffuse;"),
+      1,
+    );
+    assert.ok(
+      shader.fragmentShader.indexOf("totalDiffuse *= uPreviewDiffuse;") <
+        shader.fragmentShader.indexOf("#include <transmission_fragment>"),
+    );
+
+    const updatedGlassDefinition = structuredClone(glassDefinition);
+    updatedGlassDefinition.preview.diffuse = 0.65;
+    applyMaterialProjection(glass, projectMaterial(updatedGlassDefinition));
+    assert.equal(shader.uniforms.uPreviewDiffuse, uniform);
+    assert.equal(uniform.value, 0.65);
+    assertColorEqual(
+      glass.color,
+      new THREE.Color(glassDefinition.preview.baseColor),
+    );
+
+    assert.throws(
+      () =>
+        glass.onBeforeCompile({
+          uniforms: {},
+          fragmentShader: "void main() {}",
+        }),
+      /expected exactly one transmission fragment anchor/,
+    );
+    assert.throws(
+      () =>
+        glass.onBeforeCompile({
+          uniforms: {},
+          fragmentShader:
+            "#include <transmission_fragment>\n#include <transmission_fragment>",
+        }),
+      /expected exactly one transmission fragment anchor/,
+    );
+
+    glass.dispose();
+    metal.dispose();
   });
 });
 
@@ -292,4 +379,8 @@ function assertColorEqual(actual, expected) {
 
 function nearlyEqual(actual, expected) {
   return Math.abs(actual - expected) < 1e-10;
+}
+
+function countMatches(value, search) {
+  return value.split(search).length - 1;
 }

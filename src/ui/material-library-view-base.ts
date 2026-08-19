@@ -2,6 +2,7 @@ import "./material-library-layout.css";
 import {
   createMaterialDetailRenderKey,
   materialKindMessageKey,
+  resolveMaterialTabKey,
 } from "./material-detail-state";
 import { MATERIAL_CAPABILITIES } from "../model/material/material-capabilities";
 import { translate, type AppLocale, type MessageKey } from "./i18n";
@@ -55,6 +56,13 @@ interface MaterialListViewItem extends MaterialLibraryItem {
   readonly material: MaterialSnapshot;
   readonly usageCount: number;
 }
+
+type MaterialRenderFocus =
+  | { readonly kind: "list"; readonly materialId: string }
+  | { readonly kind: "assign" }
+  | { readonly kind: "delete" };
+
+const MATERIAL_TAB_PANEL_ID = "material-editor-panel";
 
 export const MATERIAL_PRESET_CHOICES = [
   { id: "concrete", label: "material.presetConcrete" },
@@ -114,6 +122,7 @@ export class MaterialLibraryView {
     selectedObjectId: string | null,
     locale: AppLocale,
   ): void {
+    const renderFocus = this.#captureRenderFocus();
     const localeChanged = locale !== this.#locale;
     const objectChanged = selectedObjectId !== this.#selectedObjectId;
     this.#materials = materials;
@@ -132,6 +141,7 @@ export class MaterialLibraryView {
     this.#renderPresetOptions();
     this.#renderList();
     this.#renderDetail();
+    this.#restoreRenderFocus(renderFocus);
   }
 
   open(materialId?: string): void {
@@ -160,11 +170,9 @@ export class MaterialLibraryView {
       this.#renderDetail();
       if (window.matchMedia("(max-width: 600px)").matches) {
         this.#dialog.classList.add("is-detail-view");
-        queueMicrotask(() =>
-          this.#detail
-            .querySelector<HTMLElement>("[data-material-detail-heading]")
-            ?.focus(),
-        );
+        queueMicrotask(() => this.#focusDetailHeading());
+      } else {
+        queueMicrotask(() => this.#focusMaterialListItem(selectedId));
       }
       return true;
     }
@@ -192,6 +200,7 @@ export class MaterialLibraryView {
       this.#editorTab = tab;
       this.#renderedDetailKey = "";
       this.#renderDetail();
+      queueMicrotask(() => this.#focusActiveTab());
       return true;
     }
     return false;
@@ -221,9 +230,60 @@ export class MaterialLibraryView {
         : "all";
       this.#renderedDetailKey = "";
       this.#renderDetail();
+      queueMicrotask(() =>
+        this.#query<HTMLSelectElement>("[data-material-capability-support]").focus(),
+      );
       return true;
     }
     return false;
+  }
+
+  handleUiFocusOut(target: HTMLInputElement): boolean {
+    const materialId =
+      target.dataset.renameMaterial ??
+      target.dataset.materialPreviewId ??
+      target.dataset.materialPovId;
+    if (!materialId) return false;
+    const material = this.#materials.find((item) => item.id === materialId);
+    if (!material) return false;
+
+    if (target.dataset.renameMaterial) {
+      target.value = material.name;
+      return true;
+    }
+
+    const previewField = target.dataset
+      .materialPreviewField as MaterialPreviewField | undefined;
+    if (previewField) {
+      this.#syncPreviewInput(target, material, previewField);
+      return true;
+    }
+
+    const povPath = target.dataset.materialPovPath;
+    if (povPath) {
+      target.value = formatPovInputValue(
+        resolveCapabilityValue(material, povPath),
+      );
+      return true;
+    }
+    return false;
+  }
+
+  handleUiKeydown(event: KeyboardEvent): boolean {
+    const target = event.target;
+    if (!(target instanceof Element)) return false;
+    const tab = target.closest<HTMLElement>("[data-material-tab]")?.dataset
+      .materialTab;
+    if (tab !== "basic" && tab !== "advanced") return false;
+    const nextTab = resolveMaterialTabKey(tab, event.key);
+    if (!nextTab) return false;
+
+    event.preventDefault();
+    this.#editorTab = nextTab;
+    this.#renderedDetailKey = "";
+    this.#renderDetail();
+    queueMicrotask(() => this.#focusActiveTab());
+    return true;
   }
 
   #createDialog(): HTMLDialogElement {
@@ -374,7 +434,11 @@ export class MaterialLibraryView {
     assign.disabled = !object || assigned;
     const unique = this.#action("material.makeUnique", "secondary-action");
     unique.dataset.makeMaterialUnique = object?.id ?? "";
-    unique.disabled = !assigned;
+    unique.disabled = !assigned || usage <= 1;
+    unique.setAttribute("aria-describedby", "material-usage-note");
+    if (assigned && usage <= 1) {
+      unique.title = translate(this.#locale, "material.singleUseNotice");
+    }
     const duplicate = this.#action("material.duplicate", "secondary-action");
     duplicate.dataset.duplicateMaterial = material.id;
     const remove = this.#action("material.delete", "danger-action");
@@ -383,17 +447,33 @@ export class MaterialLibraryView {
     if (usage) remove.title = translate(this.#locale, "material.deleteInUse");
     actions.append(assign, unique, duplicate, remove);
 
+    const usageNoticeKey: MessageKey =
+      usage > 1
+        ? "material.sharedChangeNotice"
+        : usage === 1
+          ? "material.singleUseNotice"
+          : "material.unusedNotice";
+    const usageUnitKey: MessageKey =
+      usage === 1 ? "material.object" : "material.objects";
     const notice = textElement(
       "p",
       `${translate(this.#locale, "material.usedBy")} ${usage} ${translate(
         this.#locale,
-        "material.objects",
-      )}. ${translate(this.#locale, "material.sharedChangeNotice")}`,
+        usageUnitKey,
+      )}${this.#locale === "ja" ? "。" : "."} ${translate(
+        this.#locale,
+        usageNoticeKey,
+      )}`,
     );
+    notice.id = "material-usage-note";
     notice.className = "material-shared-notice";
 
     const tabs = element("div", "material-editor-tabs");
     tabs.setAttribute("role", "tablist");
+    tabs.setAttribute(
+      "aria-label",
+      translate(this.#locale, "material.libraryTitle"),
+    );
     for (const tab of ["basic", "advanced"] as const) {
       const button = textElement(
         "button",
@@ -404,13 +484,18 @@ export class MaterialLibraryView {
       );
       button.setAttribute("type", "button");
       button.setAttribute("role", "tab");
+      button.id = materialTabId(tab);
       button.dataset.materialTab = tab;
+      button.setAttribute("aria-controls", MATERIAL_TAB_PANEL_ID);
       button.setAttribute("aria-selected", String(tab === this.#editorTab));
+      button.tabIndex = tab === this.#editorTab ? 0 : -1;
       button.classList.toggle("is-active", tab === this.#editorTab);
       tabs.append(button);
     }
     const body = element("div", "material-editor-body");
+    body.id = MATERIAL_TAB_PANEL_ID;
     body.setAttribute("role", "tabpanel");
+    body.setAttribute("aria-labelledby", materialTabId(this.#editorTab));
     body.append(
       this.#editorTab === "basic"
         ? renderMaterialBasicEditor(material, this.#locale)
@@ -555,10 +640,16 @@ export class MaterialLibraryView {
     )) {
       if (input === document.activeElement) continue;
       const key = input.dataset.materialPreviewField as MaterialPreviewField;
-      const value = material.preview[key];
-      if (input.type === "checkbox") input.checked = Boolean(value);
-      else if (input.type === "color") input.value = String(value);
-      else input.value = formatInputValue(value);
+      this.#syncPreviewInput(input, material, key);
+    }
+    for (const input of this.#detail.querySelectorAll<HTMLInputElement>(
+      "[data-material-pov-path]",
+    )) {
+      if (input === document.activeElement) continue;
+      const path = input.dataset.materialPovPath;
+      if (path) {
+        input.value = formatPovInputValue(resolveCapabilityValue(material, path));
+      }
     }
     const name = this.#detail.querySelector<HTMLInputElement>(
       "[data-rename-material]",
@@ -577,6 +668,86 @@ export class MaterialLibraryView {
         materialKindMessageKey(material.presetId),
       );
     }
+  }
+
+  #syncPreviewInput(
+    input: HTMLInputElement,
+    material: MaterialSnapshot,
+    key: MaterialPreviewField,
+  ): void {
+    const value = material.preview[key];
+    if (input.type === "checkbox") input.checked = Boolean(value);
+    else if (input.type === "color") input.value = String(value);
+    else input.value = formatInputValue(value);
+  }
+
+  #captureRenderFocus(): MaterialRenderFocus | undefined {
+    const active = document.activeElement;
+    if (
+      !this.#dialog.open ||
+      !(active instanceof HTMLElement) ||
+      !this.#dialog.contains(active)
+    ) {
+      return undefined;
+    }
+    const materialId = active.dataset.materialSelect;
+    if (materialId) return { kind: "list", materialId };
+    if (active.dataset.assignMaterial) return { kind: "assign" };
+    if (active.dataset.deleteMaterial) return { kind: "delete" };
+    return undefined;
+  }
+
+  #restoreRenderFocus(focus: MaterialRenderFocus | undefined): void {
+    if (!focus) return;
+    queueMicrotask(() => {
+      if (!this.#dialog.open) return;
+      if (focus.kind === "list") {
+        this.#focusMaterialListItem(focus.materialId);
+        return;
+      }
+      if (focus.kind === "assign") {
+        this.#detail
+          .querySelector<HTMLButtonElement>(
+            ".material-detail-actions button:not(:disabled)",
+          )
+          ?.focus();
+        return;
+      }
+      if (window.matchMedia("(max-width: 600px)").matches) {
+        this.#focusDetailHeading();
+        return;
+      }
+      if (
+        !this.#selectedMaterialId ||
+        !this.#focusMaterialListItem(this.#selectedMaterialId)
+      ) {
+        this.#focusDetailHeading();
+      }
+    });
+  }
+
+  #focusMaterialListItem(materialId: string): boolean {
+    const button = [
+      ...this.#list.querySelectorAll<HTMLButtonElement>(
+        "[data-material-select]",
+      ),
+    ].find((candidate) => candidate.dataset.materialSelect === materialId);
+    button?.focus();
+    return Boolean(button);
+  }
+
+  #focusDetailHeading(): void {
+    this.#detail
+      .querySelector<HTMLElement>("[data-material-detail-heading]")
+      ?.focus();
+  }
+
+  #focusActiveTab(): void {
+    this.#detail
+      .querySelector<HTMLButtonElement>(
+        `[data-material-tab="${this.#editorTab}"]`,
+      )
+      ?.focus();
   }
 
   #listItem(material: MaterialSnapshot): MaterialListViewItem {
@@ -678,6 +849,16 @@ function formatInputValue(value: unknown): string {
     return String(Math.round(value * 1000) / 1000);
   }
   return typeof value === "string" ? value : "";
+}
+
+function formatPovInputValue(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? String(value)
+    : "";
+}
+
+function materialTabId(tab: MaterialEditorTab): string {
+  return `material-editor-tab-${tab}`;
 }
 
 function isSupportFilter(

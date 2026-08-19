@@ -188,8 +188,13 @@ export class AppShell {
       options,
     );
     this.#root.addEventListener(
+      "keydown",
+      (event) => this.#materialLibrary.handleUiKeydown(event),
+      options,
+    );
+    this.#root.addEventListener(
       "focusout",
-      () => queueMicrotask(() => this.#renderEditor()),
+      (event) => this.#handleEditorFocusOut(event),
       options,
     );
     document.addEventListener(
@@ -437,6 +442,40 @@ export class AppShell {
       if (this.#isGeometryKey(geometryKey)) {
         actions.updateObjectGeometry(objectId, geometryKey, input.valueAsNumber);
       }
+    }
+  }
+
+  #handleEditorFocusOut(event: FocusEvent): void {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    if (this.#materialLibrary.handleUiFocusOut(input) || !this.#model) return;
+
+    const nameId = input.dataset.objectNameInput;
+    if (nameId) {
+      const object = this.#model.objects.find((item) => item.id === nameId);
+      if (object) input.value = object.name;
+      return;
+    }
+
+    const objectId = input.dataset.objectId;
+    if (!objectId) return;
+    const object = this.#model.objects.find((item) => item.id === objectId);
+    if (!object) return;
+
+    const group = input.dataset.transformGroup;
+    const axis = input.dataset.axis;
+    if (this.#isTransformGroup(group) && this.#isTransformAxis(axis)) {
+      input.value = formatEditorNumber(object.transform[group][axis]);
+      return;
+    }
+
+    const geometryKey = input.dataset.geometryKey;
+    if (this.#isGeometryKey(geometryKey)) {
+      const geometry = object.geometry as unknown as Record<
+        string,
+        number | string
+      >;
+      input.value = formatEditorNumber(Number(geometry[geometryKey]));
     }
   }
 
@@ -688,4 +727,9 @@ export class AppShell {
       </div>
     `;
   }
+}
+
+function formatEditorNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return String(Number(value.toFixed(4)));
 }

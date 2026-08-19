@@ -46,11 +46,19 @@ export function migrateSceneModel(
       legacyObject.id,
       allocatedIds,
     );
-    const materialPreview = createDefaultPhysicalMaterialPreview({
-      baseColor: legacyMaterial.color,
-      metalness: legacyMaterial.metalness,
-      roughness: legacyMaterial.roughness,
-    });
+    const materialPreview = createDefaultPhysicalMaterialPreview();
+    materialPreview.baseColor = normalizeLegacyColor(
+      legacyMaterial.color,
+      materialPreview.baseColor,
+    );
+    materialPreview.metalness = normalizeLegacyUnitInterval(
+      legacyMaterial.metalness,
+      materialPreview.metalness,
+    );
+    materialPreview.roughness = normalizeLegacyUnitInterval(
+      legacyMaterial.roughness,
+      materialPreview.roughness,
+    );
 
     materials.push(
       createMaterialDefinitionFromPreview(
@@ -75,6 +83,23 @@ export function isLegacySceneModelV1(
   scene: SceneModel | LegacySceneModelV1,
 ): scene is LegacySceneModelV1 {
   return scene.schemaVersion === 1;
+}
+
+function normalizeLegacyColor(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  const short = /^#([\da-f]{3})$/i.exec(trimmed);
+  if (short) {
+    return `#${[...short[1]]
+      .map((digit) => digit.repeat(2))
+      .join("")}`.toLowerCase();
+  }
+  return /^#[\da-f]{6}$/i.test(trimmed) ? trimmed.toLowerCase() : fallback;
+}
+
+function normalizeLegacyUnitInterval(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(1, Math.max(0, value));
 }
 
 function allocateMigratedMaterialId(

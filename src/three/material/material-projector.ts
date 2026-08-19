@@ -10,6 +10,20 @@ type MaterialDefinitionSnapshot = DeepReadonly<MaterialDefinitionModel>;
 
 const THREE_IOR_MINIMUM = 1;
 const THREE_IOR_MAXIMUM = 2.333;
+const PREVIEW_DIFFUSE_UNIFORM = "uPreviewDiffuse";
+const PREVIEW_DIFFUSE_PROGRAM_CACHE_KEY =
+  "render-viewer-3d-preview-diffuse-v1";
+const TRANSMISSION_FRAGMENT_ANCHOR = "#include <transmission_fragment>";
+const PREVIEW_DIFFUSE_SCALE_STATEMENT = "totalDiffuse *= uPreviewDiffuse;";
+
+interface ScalarUniform {
+  value: number;
+}
+
+const previewDiffuseUniforms = new WeakMap<
+  THREE.MeshPhysicalMaterial,
+  ScalarUniform
+>();
 
 export interface MaterialProjectionDiagnostic {
   readonly path: string;
@@ -126,6 +140,7 @@ export function createMeshPhysicalMaterial(
   projection: MaterialProjection,
 ): THREE.MeshPhysicalMaterial {
   const material = new THREE.MeshPhysicalMaterial();
+  installPreviewDiffuseLobe(material, projection.preview.diffuse);
   applyMaterialProjection(material, projection);
   return material;
 }
@@ -135,7 +150,9 @@ export function applyMaterialProjection(
   projection: MaterialProjection,
 ): void {
   const preview = projection.preview;
-  material.color.set(preview.baseColor).multiplyScalar(preview.diffuse);
+  installPreviewDiffuseLobe(material, preview.diffuse);
+  previewDiffuseUniforms.get(material)!.value = preview.diffuse;
+  material.color.set(preview.baseColor);
   material.metalness = preview.metalness;
   material.roughness = preview.roughness;
   material.opacity = preview.opacity;
@@ -166,6 +183,41 @@ export function applyMaterialProjection(
   material.anisotropy = preview.anisotropy;
   material.anisotropyRotation = preview.anisotropyRotation;
   material.dispersion = preview.dispersion;
+}
+
+function installPreviewDiffuseLobe(
+  material: THREE.MeshPhysicalMaterial,
+  initialValue: number,
+): void {
+  if (previewDiffuseUniforms.has(material)) return;
+
+  const uniform: ScalarUniform = { value: initialValue };
+  previewDiffuseUniforms.set(material, uniform);
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms[PREVIEW_DIFFUSE_UNIFORM] = uniform;
+    shader.fragmentShader = injectPreviewDiffuseLobe(shader.fragmentShader);
+  };
+  material.customProgramCacheKey = () => PREVIEW_DIFFUSE_PROGRAM_CACHE_KEY;
+  material.needsUpdate = true;
+}
+
+function injectPreviewDiffuseLobe(fragmentShader: string): string {
+  const firstAnchor = fragmentShader.indexOf(TRANSMISSION_FRAGMENT_ANCHOR);
+  const secondAnchor = fragmentShader.indexOf(
+    TRANSMISSION_FRAGMENT_ANCHOR,
+    firstAnchor + TRANSMISSION_FRAGMENT_ANCHOR.length,
+  );
+  if (firstAnchor < 0 || secondAnchor >= 0) {
+    throw new Error(
+      "Unexpected MeshPhysicalMaterial shader: expected exactly one transmission fragment anchor.",
+    );
+  }
+
+  const shaderWithScale = fragmentShader.replace(
+    TRANSMISSION_FRAGMENT_ANCHOR,
+    `${PREVIEW_DIFFUSE_SCALE_STATEMENT}\n${TRANSMISSION_FRAGMENT_ANCHOR}`,
+  );
+  return `uniform float ${PREVIEW_DIFFUSE_UNIFORM};\n${shaderWithScale}`;
 }
 
 function createValueSignature(preview: MeshPhysicalPreviewProjection): string {

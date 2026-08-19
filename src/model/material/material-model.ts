@@ -146,13 +146,15 @@ export interface PovFinishModel {
   ambient?: number | PovColorModel;
   emission?: number | PovColorModel;
   diffuse?: number;
-  albedo?: boolean;
+  diffuseAlbedo?: boolean;
   brilliance?: number;
   backsideDiffuse?: number;
   crand?: number;
   phong?: number;
+  phongAlbedo?: boolean;
   phongSize?: number;
   specular?: number;
+  specularAlbedo?: boolean;
   roughness?: number;
   metallic?: number | boolean;
   reflection?: {
@@ -176,7 +178,8 @@ export interface PovFinishModel {
 
 export interface PovDensityModel {
   pattern: PovPatternModel;
-  densityMap?: PovMapEntryModel<PovColorModel>[];
+  colorMap?: PovMapEntryModel<PovColorModel>[];
+  densityMap?: PovMapEntryModel<PovDensityModel>[];
   transforms?: PovTransformModel[];
   extensions?: PovExtensionNodeModel[];
 }

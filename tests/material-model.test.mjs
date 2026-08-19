@@ -271,6 +271,113 @@ describe("scene schema migration", () => {
     }
   });
 
+  it("normalizes malformed v1 material values before creating v2 materials", () => {
+    const current = createDefaultSceneModel();
+    const legacyValues = [
+      {
+        color: "invalid",
+        metalness: Number.NaN,
+        roughness: Number.POSITIVE_INFINITY,
+      },
+      { color: " #AbC ", metalness: -4, roughness: 2 },
+      { color: "#123AbC", metalness: 0.25, roughness: 0.75 },
+    ];
+    const legacy = {
+      ...structuredClone(current),
+      schemaVersion: 1,
+      objects: current.objects.map((object, index) => {
+        const { materialId, ...legacyObject } = structuredClone(object);
+        void materialId;
+        return { ...legacyObject, material: legacyValues[index] };
+      }),
+    };
+    delete legacy.materials;
+
+    const migrated = material.migrateSceneModel(legacy);
+    assert.deepEqual(
+      migrated.materials.map((definition) => [
+        definition.preview.baseColor,
+        definition.preview.metalness,
+        definition.preview.roughness,
+      ]),
+      [
+        ["#5f8cff", 0, 0.6],
+        ["#aabbcc", 0, 1],
+        ["#123abc", 0.25, 0.75],
+      ],
+    );
+    for (const definition of migrated.materials) {
+      assert.equal(Number.isFinite(definition.preview.metalness), true);
+      assert.equal(Number.isFinite(definition.preview.roughness), true);
+    }
+  });
+
+  it("preserves recursive density maps and independent finish albedo modifiers", () => {
+    const scene = createDefaultSceneModel();
+    const target = scene.materials[0];
+    const finish = target.pov.texture.finish;
+    assert.ok(finish);
+    finish.diffuseAlbedo = true;
+    finish.phong = 0.4;
+    finish.phongAlbedo = false;
+    finish.specularAlbedo = true;
+
+    const density = {
+      pattern: { type: "gradient", frequency: 1 },
+      colorMap: [
+        {
+          position: 0,
+          value: { red: 0.1, green: 0.2, blue: 0.3 },
+        },
+      ],
+      densityMap: [
+        {
+          position: 0.5,
+          value: {
+            pattern: { type: "wood", frequency: 2 },
+            colorMap: [
+              {
+                position: 1,
+                value: { red: 0.9, green: 0.8, blue: 0.7 },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    target.pov.interior = { media: [{ density: [density] }] };
+
+    const migrated = material.migrateSceneModel(scene);
+    const migratedTarget = migrated.materials[0];
+    const migratedFinish = migratedTarget.pov.texture.finish;
+    const migratedDensity =
+      migratedTarget.pov.interior.media[0].density[0];
+
+    assert.notEqual(migratedDensity, density);
+    assert.deepEqual(migratedDensity, density);
+    assert.deepEqual(
+      [
+        migratedFinish.diffuseAlbedo,
+        migratedFinish.phongAlbedo,
+        migratedFinish.specularAlbedo,
+      ],
+      [true, false, true],
+    );
+    assert.equal(
+      material.updateMaterialPovScalar(
+        migrated,
+        migratedTarget.id,
+        "pov.interior.media.0.density.0.densityMap.0.value.pattern.frequency",
+        3,
+      ),
+      true,
+    );
+    assert.equal(
+      migratedDensity.densityMap[0].value.pattern.frequency,
+      3,
+    );
+  });
+
   it("clones an existing v2 scene and preserves extension nodes", () => {
     const scene = createDefaultSceneModel();
     scene.materials[0].pov.extensions = [
@@ -301,8 +408,13 @@ describe("capability catalog and default scene", () => {
       "pov.pigment.rgbft",
       "pov.normal.bump-map",
       "pov.finish.reflection",
+      "pov.finish.diffuse-albedo",
+      "pov.finish.phong-albedo",
+      "pov.finish.specular-albedo",
       "pov.interior.dispersion",
       "pov.media.scattering",
+      "pov.media.density-color-map",
+      "pov.media.density-map",
       "pov.mapping.uv",
       "pov.pattern.wood",
       "pov.pattern.image-pattern",
@@ -318,6 +430,27 @@ describe("capability catalog and default scene", () => {
     const iorCapability = material.findMaterialCapability("preview.ior");
     assert.equal(iorCapability.fidelity, "approximate");
     assert.match(iorCapability.help.en, /1–2\.333/);
+
+    assert.deepEqual(
+      [
+        material.findMaterialCapability("pov.finish.diffuse-albedo").path,
+        material.findMaterialCapability("pov.finish.phong-albedo").path,
+        material.findMaterialCapability("pov.finish.specular-albedo").path,
+      ],
+      [
+        "pov.texture.finish.diffuseAlbedo",
+        "pov.texture.finish.phongAlbedo",
+        "pov.texture.finish.specularAlbedo",
+      ],
+    );
+    assert.equal(
+      material.findMaterialCapability("pov.media.density-color-map").path,
+      "pov.interior.media.*.density.*.colorMap",
+    );
+    assert.equal(
+      material.findMaterialCapability("pov.media.density-map").path,
+      "pov.interior.media.*.density.*.densityMap",
+    );
 
     const magnetMandel = material.findMaterialCapability(
       "pov.pattern.magnet-mandel",

@@ -86,9 +86,7 @@ describe("SceneGraphAdapter", () => {
     const ground = findMesh(scene, "ground-01");
     assert.equal(box.name, "Box 01");
     assert.deepEqual(box.position.toArray(), [0, 1, 0]);
-    assert.ok(
-      nearlyEqual(box.rotation.y, THREE.MathUtils.degToRad(-18)),
-    );
+    assert.ok(nearlyEqual(box.rotation.y, THREE.MathUtils.degToRad(-18)));
     assert.deepEqual(box.scale.toArray(), [1, 1, 1]);
     assert.equal(box.castShadow, true);
     assert.equal(box.receiveShadow, true);
@@ -140,10 +138,7 @@ describe("SceneGraphAdapter", () => {
     next.objects[0].transform.position = { x: 2, y: 3, z: 4 };
     next.objects[0].transform.rotationDegrees = { x: 10, y: 20, z: 30 };
     next.objects[0].transform.scale = { x: 1.5, y: 2, z: 0.5 };
-    const nextBoxMaterial = findMaterial(
-      next,
-      next.objects[0].materialId,
-    );
+    const nextBoxMaterial = findMaterial(next, next.objects[0].materialId);
     Object.assign(nextBoxMaterial.preview, {
       baseColor: "#ff8844",
       diffuse: 1,
@@ -172,15 +167,9 @@ describe("SceneGraphAdapter", () => {
     assert.equal(updatedBox.name, "Updated Box");
     assert.equal(updatedBox.visible, false);
     assert.deepEqual(updatedBox.position.toArray(), [2, 3, 4]);
-    assert.ok(
-      nearlyEqual(updatedBox.rotation.x, THREE.MathUtils.degToRad(10)),
-    );
-    assert.ok(
-      nearlyEqual(updatedBox.rotation.y, THREE.MathUtils.degToRad(20)),
-    );
-    assert.ok(
-      nearlyEqual(updatedBox.rotation.z, THREE.MathUtils.degToRad(30)),
-    );
+    assert.ok(nearlyEqual(updatedBox.rotation.x, THREE.MathUtils.degToRad(10)));
+    assert.ok(nearlyEqual(updatedBox.rotation.y, THREE.MathUtils.degToRad(20)));
+    assert.ok(nearlyEqual(updatedBox.rotation.z, THREE.MathUtils.degToRad(30)));
     assert.deepEqual(updatedBox.scale.toArray(), [1.5, 2, 0.5]);
     assert.equal(updatedBox.castShadow, false);
     assert.equal(updatedBox.receiveShadow, false);
@@ -301,9 +290,7 @@ function findMaterial(model, materialId) {
 }
 
 function assertMaterialColor(actual, definition) {
-  const expected = new THREE.Color(definition.preview.baseColor).multiplyScalar(
-    definition.preview.diffuse,
-  );
+  const expected = new THREE.Color(definition.preview.baseColor);
   assert.ok(nearlyEqual(actual.color.r, expected.r));
   assert.ok(nearlyEqual(actual.color.g, expected.g));
   assert.ok(nearlyEqual(actual.color.b, expected.b));

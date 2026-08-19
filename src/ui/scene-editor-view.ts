@@ -690,6 +690,14 @@ export class SceneEditorView {
     help.className = "import-material-help";
     help.textContent = translate(locale, "inspector.materialModeHelp");
     section.append(modes, materialLabel, help);
+    if (selectedMaterialId) {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "import-material-open";
+      open.dataset.openMaterialLibrary = selectedMaterialId;
+      open.textContent = translate(locale, "inspector.materialOpen");
+      section.append(open);
+    }
     return section;
   }
 
@@ -951,6 +959,12 @@ export class SceneEditorView {
       ) {
         select.value = imported.customMaterialId;
       }
+    }
+    const open = this.#inspectorBody.querySelector<HTMLButtonElement>(
+      "[data-open-material-library]",
+    );
+    if (open && imported.customMaterialId) {
+      open.dataset.openMaterialLibrary = imported.customMaterialId;
     }
   }
 

@@ -10,6 +10,34 @@ export type MaterialPresetId =
   | "wood-base"
   | "concrete";
 
+export type MaterialTextureWrapMode =
+  | "repeat"
+  | "clamp-to-edge"
+  | "mirrored-repeat";
+
+export interface MaterialColorMapModel {
+  assetId: string;
+  sourceName: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  byteSize: number;
+  width: number;
+  height: number;
+  repeatX: number;
+  repeatY: number;
+  offsetX: number;
+  offsetY: number;
+  rotationDegrees: number;
+  wrapMode: MaterialTextureWrapMode;
+}
+
+export type MaterialColorMapField =
+  | "repeatX"
+  | "repeatY"
+  | "offsetX"
+  | "offsetY"
+  | "rotationDegrees"
+  | "wrapMode";
+
 export interface PhysicalMaterialPreviewModel {
   baseColor: string;
   diffuse: number;
@@ -259,5 +287,6 @@ export interface MaterialDefinitionModel {
   tags: string[];
   presetId: MaterialPresetId | null;
   preview: PhysicalMaterialPreviewModel;
+  colorMap: MaterialColorMapModel | null;
   pov: PovMaterialModel;
 }

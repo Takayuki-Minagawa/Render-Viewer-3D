@@ -30,10 +30,12 @@ import {
   type SceneObjectTransformUpdate,
 } from "../model/scene-object-commands";
 import { ImportedAssetStore } from "../three/imported-asset-store";
+import { MaterialImageAssetStore } from "../three/material/image-asset-store";
 import { SceneAdapter } from "../three/scene-adapter";
 import { AppShell } from "../ui/app-shell";
 import { EditorStore } from "./editor-store";
 import { ImportController } from "./import-controller";
+import { MaterialTextureController } from "./material-texture-controller";
 import { SceneStore } from "./scene-store";
 
 export interface Application {
@@ -48,6 +50,7 @@ export function createApplication(root: HTMLElement): Application {
     transformMode: "translate",
   });
   const importedAssets = new ImportedAssetStore();
+  const materialImages = new MaterialImageAssetStore();
   const importManager = new ImportManager();
   const importAbortController = new AbortController();
   const shell = new AppShell(root);
@@ -55,6 +58,7 @@ export function createApplication(root: HTMLElement): Application {
   try {
     const adapter = new SceneAdapter(shell.viewportElement, store.getSnapshot(), {
       importedAssets,
+      materialImages,
       onCameraInteractionEnd: ({ position, target, near, far }) => {
         store.update((draft) => {
           draft.camera.position = position;
@@ -74,6 +78,11 @@ export function createApplication(root: HTMLElement): Application {
         });
       },
     });
+    const materialTextures = new MaterialTextureController(
+      store,
+      materialImages,
+      () => adapter.applyModel(store.getSnapshot()),
+    );
     const importController = new ImportController(
       importManager,
       importedAssets,
@@ -130,6 +139,15 @@ export function createApplication(root: HTMLElement): Application {
           ...options,
           signal: importAbortController.signal,
         });
+      },
+      attachMaterialColorMap: async (materialId, file) => {
+        await materialTextures.attach(materialId, file);
+      },
+      updateMaterialColorMap: (materialId, field, value) => {
+        materialTextures.update(materialId, field, value);
+      },
+      removeMaterialColorMap: (materialId) => {
+        materialTextures.remove(materialId);
       },
       addObject: (primitive) => {
         let addedId: string | null = null;
@@ -252,9 +270,11 @@ export function createApplication(root: HTMLElement): Application {
         });
       },
       deleteMaterial: (materialId) => {
+        materialTextures.cancelPending(materialId);
         store.update((draft) => {
           deleteMaterial(draft, materialId);
         });
+        materialTextures.releaseUnused();
       },
       makeMaterialUnique: (objectId) => {
         store.update((draft) => {
@@ -277,9 +297,11 @@ export function createApplication(root: HTMLElement): Application {
     return {
       dispose: () => {
         importAbortController.abort();
+        materialTextures.dispose();
         unsubscribeEditor();
         unsubscribeScene();
         adapter.dispose();
+        materialImages.dispose();
         importedAssets.dispose();
         shell.dispose();
       },

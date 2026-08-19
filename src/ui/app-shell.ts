@@ -5,7 +5,10 @@ import {
 } from "../importers";
 import type { EditorState, TransformMode } from "../app/editor-store";
 import type { ImportedMaterialMode } from "../model/imported-scene-model";
-import type { MaterialPresetId } from "../model/material/material-model";
+import type {
+  MaterialColorMapField,
+  MaterialPresetId,
+} from "../model/material/material-model";
 import type { GeometryModel, SceneSnapshot } from "../model/scene-model";
 import {
   loadAppPreferences,
@@ -20,7 +23,7 @@ import {
   hasDraggedFiles,
   importErrorDetail,
 } from "./import-ui-state";
-import { translate, type MessageKey } from "./i18n";
+import { translate, type AppLocale, type MessageKey } from "./i18n";
 import {
   MaterialLibraryView,
   type MaterialPreviewField,
@@ -37,6 +40,13 @@ export interface AppActions {
   toggleAxes: () => void;
   resetCamera: () => void;
   importFiles: (files: readonly File[], options: ImportOptions) => Promise<void>;
+  attachMaterialColorMap: (materialId: string, file: File) => Promise<void>;
+  updateMaterialColorMap: (
+    materialId: string,
+    field: MaterialColorMapField,
+    value: unknown,
+  ) => void;
+  removeMaterialColorMap: (materialId: string) => void;
   setImportedMaterialMode: (
     id: string,
     mode: ImportedMaterialMode,
@@ -129,6 +139,56 @@ const TRANSFORM_MODES = new Set<TransformMode>([
   "rotate",
   "scale",
 ]);
+const MATERIAL_COLOR_MAP_FIELDS = new Set<MaterialColorMapField>([
+  "repeatX",
+  "repeatY",
+  "offsetX",
+  "offsetY",
+  "rotationDegrees",
+  "wrapMode",
+]);
+const MATERIAL_TEXTURE_ERROR_MESSAGES = new Map<string, MessageKey>([
+  ["empty-file", "material.textureErrorEmpty"],
+  ["file-too-large", "material.textureErrorTooLarge"],
+  ["dimensions-too-large", "material.textureErrorTooLarge"],
+  ["mime-mismatch", "material.textureErrorMimeMismatch"],
+  ["animated-image", "material.textureErrorAnimated"],
+  ["unsupported-format", "material.textureErrorUnsupported"],
+  ["invalid-header", "material.textureErrorInvalid"],
+  ["decode-failed", "material.textureErrorInvalid"],
+  ["decoded-dimensions-invalid", "material.textureErrorInvalid"],
+  ["resident-limit", "material.textureErrorMemory"],
+  ["decoder-unavailable", "material.textureErrorDecoder"],
+  ["material-missing", "material.textureErrorMaterialMissing"],
+  ["disposed", "material.textureErrorInterrupted"],
+]);
+
+export function materialTextureErrorDetail(
+  error: unknown,
+  locale: AppLocale,
+): string {
+  return translate(locale, materialTextureErrorMessageKey(error));
+}
+
+export function materialTextureErrorMessageKey(error: unknown): MessageKey {
+  let code: unknown;
+  if (
+    (typeof error === "object" && error !== null) ||
+    typeof error === "function"
+  ) {
+    try {
+      code = Reflect.get(error, "code");
+    } catch {
+      code = undefined;
+    }
+  }
+  const key =
+    typeof code === "string"
+      ? MATERIAL_TEXTURE_ERROR_MESSAGES.get(code)
+      : undefined;
+  return key ?? "material.textureErrorUnknown";
+}
+
 const TRANSFORM_GROUPS = new Set<TransformGroup>([
   "position",
   "rotationDegrees",
@@ -176,6 +236,7 @@ export class AppShell {
   #importBusy = false;
   #disposed = false;
   #importNotice: ImportNotice = { kind: "idle" };
+  readonly #materialTextureGenerations = new Map<string, number>();
   #model: SceneSnapshot | undefined;
   #editorState: EditorState = DEFAULT_EDITOR_STATE;
 
@@ -242,6 +303,11 @@ export class AppShell {
     this.#root.addEventListener(
       "input",
       (event) => this.#handleEditorInput(event, actions),
+      options,
+    );
+    this.#root.addEventListener(
+      "change",
+      (event) => this.#handleEditorChange(event, actions),
       options,
     );
     this.#root.addEventListener(
@@ -393,6 +459,21 @@ export class AppShell {
       return;
     }
 
+    const removeColorMapId = target.closest<HTMLElement>(
+      "[data-remove-material-color-map]",
+    )?.dataset.removeMaterialColorMap;
+    if (removeColorMapId) {
+      this.#nextMaterialTextureGeneration(removeColorMapId);
+      actions.removeMaterialColorMap(removeColorMapId);
+      this.#materialLibrary.setTextureStatus(removeColorMapId, { kind: "idle" });
+      queueMicrotask(() =>
+        this.#root
+          .querySelector<HTMLInputElement>("[data-material-texture-input]")
+          ?.focus(),
+      );
+      return;
+    }
+
     const previewPreset = target.closest<HTMLElement>(
       "[data-material-preview-value]",
     );
@@ -456,6 +537,25 @@ export class AppShell {
   #handleEditorInput(event: Event, actions: AppActions): void {
     const input = event.target;
     if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement)) {
+      return;
+    }
+    const colorMapId = input.dataset.materialColorMapId;
+    const colorMapField = input.dataset
+      .materialColorMapField as MaterialColorMapField | undefined;
+    if (
+      colorMapId &&
+      colorMapField &&
+      MATERIAL_COLOR_MAP_FIELDS.has(colorMapField)
+    ) {
+      const value =
+        colorMapField === "wrapMode"
+          ? input.value
+          : input instanceof HTMLInputElement
+            ? input.valueAsNumber
+            : Number.NaN;
+      if (typeof value === "string" || Number.isFinite(value)) {
+        actions.updateMaterialColorMap(colorMapId, colorMapField, value);
+      }
       return;
     }
     if (this.#materialLibrary.handleUiInput(input)) return;
@@ -544,6 +644,62 @@ export class AppShell {
         actions.updateObjectGeometry(objectId, geometryKey, input.valueAsNumber);
       }
     }
+  }
+
+  #handleEditorChange(event: Event, actions: AppActions): void {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    const materialId = input.dataset.materialTextureInput;
+    if (!materialId || input.type !== "file") return;
+
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+
+    const generation = this.#nextMaterialTextureGeneration(materialId);
+    this.#materialLibrary.setTextureStatus(materialId, { kind: "busy" });
+    void this.#runMaterialTextureAction(
+      materialId,
+      file,
+      generation,
+      actions,
+    );
+  }
+
+  async #runMaterialTextureAction(
+    materialId: string,
+    file: File,
+    generation: number,
+    actions: AppActions,
+  ): Promise<void> {
+    try {
+      await actions.attachMaterialColorMap(materialId, file);
+      if (
+        this.#disposed ||
+        this.#materialTextureGenerations.get(materialId) !== generation
+      ) {
+        return;
+      }
+      this.#materialLibrary.setTextureStatus(materialId, { kind: "success" });
+    } catch (error) {
+      if (
+        this.#disposed ||
+        this.#materialTextureGenerations.get(materialId) !== generation
+      ) {
+        return;
+      }
+      console.error("Material texture loading failed.", error);
+      this.#materialLibrary.setTextureStatus(materialId, {
+        kind: "error",
+        detail: materialTextureErrorMessageKey(error),
+      });
+    }
+  }
+
+  #nextMaterialTextureGeneration(materialId: string): number {
+    const next = (this.#materialTextureGenerations.get(materialId) ?? 0) + 1;
+    this.#materialTextureGenerations.set(materialId, next);
+    return next;
   }
 
   #handleEditorFocusOut(event: FocusEvent): void {

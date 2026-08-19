@@ -1,9 +1,19 @@
-import type { PhysicalMaterialPreviewModel } from "../model/material/material-model";
+import { MATERIAL_TEXTURE_FILE_ACCEPT } from "../model/material/material-color-map";
+import type {
+  MaterialColorMapField,
+  PhysicalMaterialPreviewModel,
+} from "../model/material/material-model";
 import { translate, type AppLocale, type MessageKey } from "./i18n";
 import type { MaterialSnapshot } from "./material-capability-ui";
 import "./material-library-warning.css";
 
 export type MaterialPreviewField = keyof PhysicalMaterialPreviewModel;
+
+export type MaterialTextureUiStatus =
+  | { readonly kind: "idle" }
+  | { readonly kind: "busy" }
+  | { readonly kind: "success" }
+  | { readonly kind: "error"; readonly detail: MessageKey };
 
 interface BasicNumberField {
   readonly key: MaterialPreviewField;
@@ -59,6 +69,7 @@ const BASIC_NUMBER_FIELDS: readonly BasicNumberField[] = [
 export function renderMaterialBasicEditor(
   material: MaterialSnapshot,
   locale: AppLocale,
+  textureStatus: MaterialTextureUiStatus = { kind: "idle" },
 ): HTMLElement {
   const editor = element("div", "material-basic-editor");
   const identity = element("section", "material-editor-section");
@@ -97,8 +108,232 @@ export function renderMaterialBasicEditor(
     toggle(material, locale, "doubleSided", "material.sideDouble"),
     toggle(material, locale, "wireframe", "material.wireframe"),
   );
-  editor.append(identity, colors, numbers, toggles);
+  editor.append(
+    identity,
+    colors,
+    renderMaterialColorMapEditor(material, locale, textureStatus),
+    numbers,
+    toggles,
+  );
   return editor;
+}
+
+export function syncMaterialTextureStatus(
+  root: ParentNode,
+  materialId: string,
+  locale: AppLocale,
+  status: MaterialTextureUiStatus,
+): void {
+  const section = [...root.querySelectorAll<HTMLElement>(
+    "[data-material-texture-section]",
+  )].find((candidate) => candidate.dataset.materialTextureSection === materialId);
+  const message = [...root.querySelectorAll<HTMLElement>(
+    "[data-material-texture-status]",
+  )].find((candidate) => candidate.dataset.materialTextureStatus === materialId);
+  if (!section || !message) return;
+
+  section.setAttribute("aria-busy", String(status.kind === "busy"));
+  message.hidden = status.kind === "idle";
+  message.dataset.kind = status.kind;
+  message.setAttribute("role", status.kind === "error" ? "alert" : "status");
+  if (status.kind === "idle") {
+    message.textContent = "";
+    return;
+  }
+  const key =
+    status.kind === "busy"
+      ? "material.textureBusy"
+      : status.kind === "success"
+        ? "material.textureSuccess"
+        : "material.textureError";
+  message.textContent =
+    translate(locale, key) +
+    (status.kind === "error" ? " " + translate(locale, status.detail) : "");
+}
+
+function renderMaterialColorMapEditor(
+  material: MaterialSnapshot,
+  locale: AppLocale,
+  status: MaterialTextureUiStatus,
+): HTMLElement {
+  const colorMap = material.colorMap;
+  const section = element("section", "material-editor-section material-texture-editor");
+  section.dataset.materialTextureSection = material.id;
+
+  const heading = textElement("h4", translate(locale, "material.textureTitle"));
+  const description = textElement(
+    "p",
+    translate(locale, "material.textureDescription"),
+  );
+  description.className = "material-texture-description";
+
+  const pickerRow = element("div", "material-texture-picker");
+  const picker = element("label", "material-texture-picker-button");
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = MATERIAL_TEXTURE_FILE_ACCEPT;
+  input.className = "visually-hidden";
+  input.dataset.materialTextureInput = material.id;
+  input.setAttribute(
+    "aria-label",
+    translate(
+      locale,
+      colorMap ? "material.textureReplace" : "material.textureChoose",
+    ),
+  );
+  picker.append(
+    input,
+    textElement(
+      "span",
+      translate(
+        locale,
+        colorMap ? "material.textureReplace" : "material.textureChoose",
+      ),
+    ),
+  );
+
+  const remove = textElement(
+    "button",
+    translate(locale, "material.textureRemove"),
+  );
+  remove.type = "button";
+  remove.className = "secondary-action";
+  remove.dataset.removeMaterialColorMap = material.id;
+  remove.disabled = !colorMap;
+  pickerRow.append(picker, remove);
+
+  const metadata = element("div", "material-texture-metadata");
+  metadata.hidden = !colorMap;
+  if (colorMap) {
+    metadata.append(
+      textElement("strong", colorMap.sourceName),
+      textElement(
+        "small",
+        colorMap.width +
+          " × " +
+          colorMap.height +
+          " px · " +
+          formatFileSize(colorMap.byteSize, locale),
+      ),
+    );
+  }
+
+  const mapping = element("fieldset", "material-texture-mapping");
+  mapping.disabled = !colorMap;
+  mapping.append(
+    textElement("legend", translate(locale, "material.textureMapping")),
+    mappingNumberField(
+      material.id,
+      locale,
+      "repeatX",
+      "material.textureRepeatX",
+      0.01,
+      1000,
+      0.01,
+    ),
+    mappingNumberField(
+      material.id,
+      locale,
+      "repeatY",
+      "material.textureRepeatY",
+      0.01,
+      1000,
+      0.01,
+    ),
+    mappingNumberField(
+      material.id,
+      locale,
+      "offsetX",
+      "material.textureOffsetX",
+      -1000,
+      1000,
+      0.01,
+    ),
+    mappingNumberField(
+      material.id,
+      locale,
+      "offsetY",
+      "material.textureOffsetY",
+      -1000,
+      1000,
+      0.01,
+    ),
+    mappingNumberField(
+      material.id,
+      locale,
+      "rotationDegrees",
+      "material.textureRotation",
+      -360000,
+      360000,
+      1,
+    ),
+    mappingWrapField(material.id, locale),
+  );
+  mapping.hidden = !colorMap;
+
+  const help = textElement("small", translate(locale, "material.textureHelp"));
+  help.className = "material-inline-warning";
+  const message = document.createElement("p");
+  message.dataset.materialTextureStatus = material.id;
+  message.className = "material-texture-status";
+  message.setAttribute("aria-live", "polite");
+  section.append(heading, description, pickerRow, metadata, mapping, help, message);
+  syncMaterialTextureStatus(section, material.id, locale, status);
+  return section;
+}
+
+function mappingNumberField(
+  materialId: string,
+  locale: AppLocale,
+  field: Exclude<MaterialColorMapField, "wrapMode">,
+  labelKey: MessageKey,
+  minimum: number,
+  maximum: number,
+  step: number,
+): HTMLElement {
+  const label = element("label", "material-texture-field");
+  label.append(textElement("span", translate(locale, labelKey)));
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = String(minimum);
+  input.max = String(maximum);
+  input.step = String(step);
+  input.inputMode = "decimal";
+  input.dataset.materialColorMapId = materialId;
+  input.dataset.materialColorMapField = field;
+  label.append(input);
+  return label;
+}
+
+function mappingWrapField(
+  materialId: string,
+  locale: AppLocale,
+): HTMLElement {
+  const label = element("label", "material-texture-field");
+  label.append(textElement("span", translate(locale, "material.textureWrap")));
+  const select = document.createElement("select");
+  select.dataset.materialColorMapId = materialId;
+  select.dataset.materialColorMapField = "wrapMode";
+  for (const [value, key] of [
+    ["repeat", "material.textureWrapRepeat"],
+    ["clamp-to-edge", "material.textureWrapClamp"],
+    ["mirrored-repeat", "material.textureWrapMirror"],
+  ] as const) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = translate(locale, key);
+    select.append(option);
+  }
+  label.append(select);
+  return label;
+}
+
+function formatFileSize(bytes: number, locale: AppLocale): string {
+  return new Intl.NumberFormat(locale, {
+    style: "unit",
+    unit: bytes >= 1024 * 1024 ? "megabyte" : "kilobyte",
+    maximumFractionDigits: 1,
+  }).format(bytes / (bytes >= 1024 * 1024 ? 1024 * 1024 : 1024));
 }
 
 function colorField(

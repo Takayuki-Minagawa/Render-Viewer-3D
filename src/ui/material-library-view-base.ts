@@ -6,6 +6,7 @@ import {
   resolveMaterialTabKey,
 } from "./material-detail-state";
 import { MATERIAL_CAPABILITIES } from "../model/material/material-capabilities";
+import type { MaterialColorMapField } from "../model/material/material-model";
 import { translate, type AppLocale, type MessageKey } from "./i18n";
 import {
   DEFAULT_MATERIAL_LIBRARY_FILTERS,
@@ -36,6 +37,10 @@ import {
   renderMaterialBasicEditor,
   type MaterialPreviewField,
 } from "./material-basic-editor";
+import {
+  syncMaterialTextureStatus,
+  type MaterialTextureUiStatus,
+} from "./material-basic-editor";
 
 export {
   collectMaterialKeywords,
@@ -60,6 +65,7 @@ interface MaterialListViewItem extends MaterialLibraryItem {
 
 type MaterialRenderFocus =
   | { readonly kind: "list"; readonly materialId: string }
+  | { readonly kind: "texture"; readonly materialId: string }
   | { readonly kind: "assign" }
   | { readonly kind: "makeUnique" }
   | { readonly kind: "delete" };
@@ -96,6 +102,8 @@ export class MaterialLibraryView {
   #capabilitySupport: "all" | MaterialSupportStatus = "all";
   #renderedDetailKey = "";
 
+  #renderedColorMapAssetId: string | null = null;
+  readonly #textureStatuses = new Map<string, MaterialTextureUiStatus>();
   constructor(root: HTMLElement) {
     this.#root = root;
     this.#dialog = this.#createDialog();
@@ -130,6 +138,10 @@ export class MaterialLibraryView {
     const localeChanged = locale !== this.#locale;
     const objectChanged = selectedObjectId !== this.#selectedObjectId;
     this.#materials = materials;
+    const materialIds = new Set(materials.map(({ id }) => id));
+    for (const materialId of this.#textureStatuses.keys()) {
+      if (!materialIds.has(materialId)) this.#textureStatuses.delete(materialId);
+    }
     this.#objects = objects;
     this.#selectedObjectId = selectedObjectId;
     this.#locale = locale;
@@ -175,6 +187,19 @@ export class MaterialLibraryView {
 
   close(): void {
     if (this.#dialog.open) this.#dialog.close();
+  }
+
+  setTextureStatus(
+    materialId: string,
+    status: MaterialTextureUiStatus,
+  ): void {
+    this.#textureStatuses.set(materialId, status);
+    syncMaterialTextureStatus(
+      this.#detail,
+      materialId,
+      this.#locale,
+      status,
+    );
   }
 
   handleUiClick(target: Element): boolean {
@@ -259,13 +284,21 @@ export class MaterialLibraryView {
     const materialId =
       target.dataset.renameMaterial ??
       target.dataset.materialPreviewId ??
-      target.dataset.materialPovId;
+      target.dataset.materialPovId ??
+      target.dataset.materialColorMapId;
     if (!materialId) return false;
     const material = this.#materials.find((item) => item.id === materialId);
     if (!material) return false;
 
     if (target.dataset.renameMaterial) {
       target.value = material.name;
+      return true;
+    }
+
+    const colorMapField = target.dataset
+      .materialColorMapField as MaterialColorMapField | undefined;
+    if (colorMapField && material.colorMap) {
+      target.value = String(material.colorMap[colorMapField]);
       return true;
     }
 
@@ -417,6 +450,13 @@ export class MaterialLibraryView {
       usage,
       assigned,
     });
+    const colorMapAssetId = material.colorMap?.assetId ?? null;
+    if (
+      detailKey === this.#renderedDetailKey &&
+      colorMapAssetId !== this.#renderedColorMapAssetId
+    ) {
+      this.#renderedDetailKey = "";
+    }
     if (detailKey === this.#renderedDetailKey) {
       this.#syncInputs(material);
       return;
@@ -520,6 +560,13 @@ export class MaterialLibraryView {
     );
     this.#detail.replaceChildren(header, actions, notice, tabs, body);
     this.#renderedDetailKey = detailKey;
+    this.#renderedColorMapAssetId = colorMapAssetId;
+    syncMaterialTextureStatus(
+      this.#detail,
+      material.id,
+      this.#locale,
+      this.#textureStatuses.get(material.id) ?? { kind: "idle" },
+    );
     this.#syncInputs(material);
   }
 
@@ -659,6 +706,16 @@ export class MaterialLibraryView {
       const key = input.dataset.materialPreviewField as MaterialPreviewField;
       this.#syncPreviewInput(input, material, key);
     }
+    for (const control of this.#detail.querySelectorAll<
+      HTMLInputElement | HTMLSelectElement
+    >("[data-material-color-map-field]")) {
+      if (control === document.activeElement) continue;
+      const colorMap = material.colorMap;
+      const field = control.dataset
+        .materialColorMapField as MaterialColorMapField | undefined;
+      if (!colorMap || !field) continue;
+      control.value = String(colorMap[field]);
+    }
     for (const input of this.#detail.querySelectorAll<HTMLInputElement>(
       "[data-material-pov-path]",
     )) {
@@ -709,6 +766,10 @@ export class MaterialLibraryView {
     }
     const materialId = active.dataset.materialSelect;
     if (materialId) return { kind: "list", materialId };
+    const textureMaterialId = active.dataset.materialTextureInput;
+    if (textureMaterialId) {
+      return { kind: "texture", materialId: textureMaterialId };
+    }
     if (active.dataset.assignMaterial) return { kind: "assign" };
     if (active.dataset.makeMaterialUnique) return { kind: "makeUnique" };
     if (active.dataset.deleteMaterial) return { kind: "delete" };
@@ -721,6 +782,18 @@ export class MaterialLibraryView {
       if (!this.#dialog.open) return;
       if (focus.kind === "list") {
         this.#focusMaterialListItem(focus.materialId);
+        return;
+      }
+      if (focus.kind === "texture") {
+        const input = [
+          ...this.#detail.querySelectorAll<HTMLInputElement>(
+            "[data-material-texture-input]",
+          ),
+        ].find(
+          (candidate) =>
+            candidate.dataset.materialTextureInput === focus.materialId,
+        );
+        input?.focus();
         return;
       }
       if (focus.kind === "assign") {

@@ -40,7 +40,7 @@ after(async () => {
 });
 
 describe("MaterialRuntimeCache local color maps", () => {
-  it("configures sRGB UV mapping and updates mapping without replacing texture identity", async () => {
+  it("updates affine mapping without re-uploading and notifies wrap changes", async () => {
     const asset = await createLoadedAsset(8, 4);
     const cache = new MaterialRuntimeCache(asset.store);
     const definition = createTexturedDefinition("mapped", asset.descriptor, {
@@ -68,6 +68,8 @@ describe("MaterialRuntimeCache local color maps", () => {
     assert.ok(texture.version > 0);
 
     const textureDisposal = trackDisposeEvent(texture);
+    const initialTextureVersion = texture.version;
+    const initialSourceVersion = texture.source.version;
     const updated = structuredClone(definition);
     Object.assign(updated.colorMap, {
       repeatX: 7,
@@ -75,20 +77,30 @@ describe("MaterialRuntimeCache local color maps", () => {
       offsetX: -2,
       offsetY: 4,
       rotationDegrees: -45,
-      wrapMode: "clamp-to-edge",
     });
     cache.reconcile([updated]);
 
     assert.equal(cache.requireMaterial(definition.id), material);
     assert.equal(material.map, texture);
-    assert.equal(texture.wrapS, THREE.ClampToEdgeWrapping);
-    assert.equal(texture.wrapT, THREE.ClampToEdgeWrapping);
+    assert.equal(texture.wrapS, THREE.MirroredRepeatWrapping);
+    assert.equal(texture.wrapT, THREE.MirroredRepeatWrapping);
     assert.deepEqual(texture.repeat.toArray(), [7, 0.5]);
     assert.deepEqual(texture.offset.toArray(), [-2, 4]);
     assert.ok(nearlyEqual(texture.rotation, -Math.PI / 4));
+    assert.equal(texture.version, initialTextureVersion);
+    assert.equal(texture.source.version, initialSourceVersion);
     assert.equal(textureDisposal.count, 0);
 
-    const repeat = structuredClone(updated);
+    const wrapUpdated = structuredClone(updated);
+    wrapUpdated.colorMap.wrapMode = "clamp-to-edge";
+    cache.reconcile([wrapUpdated]);
+    assert.equal(material.map, texture);
+    assert.equal(texture.wrapS, THREE.ClampToEdgeWrapping);
+    assert.equal(texture.wrapT, THREE.ClampToEdgeWrapping);
+    assert.ok(texture.version > initialTextureVersion);
+    assert.ok(texture.source.version > initialSourceVersion);
+
+    const repeat = structuredClone(wrapUpdated);
     repeat.colorMap.wrapMode = "repeat";
     cache.reconcile([repeat]);
     assert.equal(material.map, texture);
@@ -189,6 +201,171 @@ describe("MaterialRuntimeCache local color maps", () => {
     store.dispose();
   });
 
+  it("uses a shared Source with a top-left glTF variant across updates and disposal", async () => {
+    const loaded = await createLoadedAssets([
+      [8, 4],
+      [16, 8],
+    ]);
+    const [firstDescriptor, secondDescriptor] = loaded.descriptors;
+    const definition = createTexturedDefinition("oriented", firstDescriptor, {
+      repeatX: 1.5,
+      repeatY: 0.75,
+      offsetX: 0.125,
+      offsetY: -0.25,
+      rotationDegrees: 30,
+      wrapMode: "clamp-to-edge",
+    });
+    const materials = new MaterialRuntimeCache(loaded.store);
+    materials.reconcile([definition]);
+    const standardMaterial = materials.requireMaterial(definition.id);
+    const standardMaterialDisposal = trackDisposeEvent(standardMaterial);
+
+    const gltfMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial(),
+    );
+    const objMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial(),
+    );
+    const importedAssets = new ImportedAssetStore();
+    importedAssets.register("gltf-asset", new THREE.Group().add(gltfMesh));
+    importedAssets.register("obj-asset", new THREE.Group().add(objMesh));
+    const scene = new THREE.Scene();
+    const adapter = new ImportedSceneAdapter(scene, importedAssets, materials);
+    const gltfModel = createImportedModel({
+      id: "gltf-model",
+      assetId: "gltf-asset",
+      format: "glTF",
+    });
+    const objModel = createImportedModel({
+      id: "obj-model",
+      assetId: "obj-asset",
+      format: "OBJ",
+    });
+    for (const model of [gltfModel, objModel]) {
+      model.materialMode = "custom";
+      model.customMaterialId = definition.id;
+    }
+
+    adapter.applyModel([gltfModel, objModel], [definition]);
+    const topLeftMaterial = gltfMesh.material;
+    assert.ok(topLeftMaterial instanceof THREE.MeshPhysicalMaterial);
+    assert.notEqual(topLeftMaterial, standardMaterial);
+    assert.equal(objMesh.material, standardMaterial);
+    assert.equal(
+      topLeftMaterial,
+      materials.requireMaterial(definition.id, "top-left"),
+    );
+    const standardTexture = standardMaterial.map;
+    const topLeftTexture = topLeftMaterial.map;
+    assert.ok(standardTexture instanceof THREE.Texture);
+    assert.ok(topLeftTexture instanceof THREE.Texture);
+    assert.notEqual(topLeftTexture, standardTexture);
+    assert.equal(topLeftTexture.source, standardTexture.source);
+    assert.equal(topLeftTexture.source.data, loaded.images[0].image);
+    assert.equal(standardTexture.matrixAutoUpdate, true);
+    assert.equal(topLeftTexture.matrixAutoUpdate, false);
+    assertEquivalentUvMapping(standardTexture, topLeftTexture, 0.2, 0.3);
+
+    const topLeftMaterialDisposal = trackDisposeEvent(topLeftMaterial);
+    const firstStandardTextureDisposal = trackDisposeEvent(standardTexture);
+    const firstTopLeftTextureDisposal = trackDisposeEvent(topLeftTexture);
+    assert.equal(loaded.store.delete(firstDescriptor.assetId), true);
+    assert.equal(loaded.store.has(firstDescriptor.assetId), true);
+    assert.equal(loaded.images[0].closeCount, 0);
+
+    const replaced = structuredClone(definition);
+    replaced.colorMap = {
+      ...structuredClone(secondDescriptor),
+      repeatX: definition.colorMap.repeatX,
+      repeatY: definition.colorMap.repeatY,
+      offsetX: definition.colorMap.offsetX,
+      offsetY: definition.colorMap.offsetY,
+      rotationDegrees: definition.colorMap.rotationDegrees,
+      wrapMode: definition.colorMap.wrapMode,
+    };
+    materials.reconcile([replaced]);
+    adapter.applyModel([gltfModel, objModel], [replaced]);
+
+    const replacedStandardTexture = standardMaterial.map;
+    const replacedTopLeftTexture = topLeftMaterial.map;
+    assert.equal(gltfMesh.material, topLeftMaterial);
+    assert.equal(objMesh.material, standardMaterial);
+    assert.ok(replacedStandardTexture instanceof THREE.Texture);
+    assert.ok(replacedTopLeftTexture instanceof THREE.Texture);
+    assert.notEqual(replacedStandardTexture, standardTexture);
+    assert.notEqual(replacedTopLeftTexture, topLeftTexture);
+    assert.equal(replacedTopLeftTexture.source, replacedStandardTexture.source);
+    assert.equal(replacedTopLeftTexture.source.data, loaded.images[1].image);
+    assert.equal(firstStandardTextureDisposal.count, 1);
+    assert.equal(firstTopLeftTextureDisposal.count, 1);
+    assert.equal(loaded.store.has(firstDescriptor.assetId), false);
+    assert.equal(loaded.images[0].closeCount, 1);
+
+    const secondStandardTextureDisposal =
+      trackDisposeEvent(replacedStandardTexture);
+    const secondTopLeftTextureDisposal =
+      trackDisposeEvent(replacedTopLeftTexture);
+    const standardVersion = replacedStandardTexture.version;
+    const topLeftVersion = replacedTopLeftTexture.version;
+    const sourceVersion = replacedStandardTexture.source.version;
+    const mapped = structuredClone(replaced);
+    Object.assign(mapped.colorMap, {
+      repeatX: 2.25,
+      repeatY: 1.25,
+      offsetX: -0.5,
+      offsetY: 0.375,
+      rotationDegrees: -20,
+    });
+    materials.reconcile([mapped]);
+    adapter.applyModel([gltfModel, objModel], [mapped]);
+    assert.equal(standardMaterial.map, replacedStandardTexture);
+    assert.equal(topLeftMaterial.map, replacedTopLeftTexture);
+    assert.equal(replacedStandardTexture.version, standardVersion);
+    assert.equal(replacedTopLeftTexture.version, topLeftVersion);
+    assert.equal(replacedStandardTexture.source.version, sourceVersion);
+    assert.equal(replacedTopLeftTexture.matrixAutoUpdate, false);
+    assertEquivalentUvMapping(
+      replacedStandardTexture,
+      replacedTopLeftTexture,
+      0.4,
+      0.15,
+    );
+
+    const wrapped = structuredClone(mapped);
+    wrapped.colorMap.wrapMode = "mirrored-repeat";
+    materials.reconcile([wrapped]);
+    assert.ok(replacedStandardTexture.version > standardVersion);
+    assert.ok(replacedTopLeftTexture.version > topLeftVersion);
+    assert.ok(replacedStandardTexture.source.version > sourceVersion);
+
+    assert.equal(loaded.store.delete(secondDescriptor.assetId), true);
+    assert.equal(loaded.store.has(secondDescriptor.assetId), true);
+    const removed = structuredClone(wrapped);
+    removed.colorMap = null;
+    materials.reconcile([removed]);
+    adapter.applyModel([gltfModel, objModel], [removed]);
+    assert.equal(gltfMesh.material, standardMaterial);
+    assert.equal(objMesh.material, standardMaterial);
+    assert.equal(standardMaterial.map, null);
+    assert.equal(secondStandardTextureDisposal.count, 1);
+    assert.equal(secondTopLeftTextureDisposal.count, 1);
+    assert.equal(topLeftMaterialDisposal.count, 1);
+    assert.equal(loaded.store.has(secondDescriptor.assetId), false);
+    assert.equal(loaded.images[1].closeCount, 1);
+
+    adapter.dispose();
+    assert.equal(standardMaterialDisposal.count, 0);
+    materials.dispose();
+    materials.dispose();
+    assert.equal(standardMaterialDisposal.count, 1);
+    assert.equal(topLeftMaterialDisposal.count, 1);
+    loaded.store.dispose();
+    assert.equal(loaded.images[0].closeCount, 1);
+    assert.equal(loaded.images[1].closeCount, 1);
+  });
+
   it("uses a stable untextured fallback only for imported meshes without usable UVs", async () => {
     const asset = await createLoadedAsset(8, 8);
     const definition = createTexturedDefinition("custom", asset.descriptor);
@@ -219,9 +396,18 @@ describe("MaterialRuntimeCache local color maps", () => {
     model.customMaterialId = definition.id;
 
     adapter.applyModel([model], [definition]);
+    const gltfMaterial = uvMesh.material;
     const fallback = noUvMesh.material;
-    assert.equal(uvMesh.material, texturedMaterial);
+    assert.equal(
+      gltfMaterial,
+      materials.requireMaterial(definition.id, "top-left"),
+    );
+    assert.notEqual(gltfMaterial, texturedMaterial);
+    assert.ok(gltfMaterial instanceof THREE.MeshPhysicalMaterial);
+    assert.ok(gltfMaterial.map instanceof THREE.Texture);
     assert.ok(texturedMaterial.map instanceof THREE.Texture);
+    assert.equal(gltfMaterial.map.source, texturedMaterial.map.source);
+    assert.notEqual(fallback, gltfMaterial);
     assert.notEqual(fallback, texturedMaterial);
     assert.ok(fallback instanceof THREE.MeshPhysicalMaterial);
     assert.equal(fallback.map, null);
@@ -229,14 +415,17 @@ describe("MaterialRuntimeCache local color maps", () => {
     assert.equal(materials.requireUntexturedMaterial(definition.id), fallback);
 
     const fallbackDisposal = trackDisposeEvent(fallback);
+    const gltfMaterialDisposal = trackDisposeEvent(gltfMaterial);
     const updated = structuredClone(definition);
     updated.preview.roughness = 0.91;
     updated.colorMap.repeatX = 3;
     materials.reconcile([updated]);
     adapter.applyModel([model], [updated]);
-    assert.equal(uvMesh.material, texturedMaterial);
+    assert.equal(uvMesh.material, gltfMaterial);
     assert.equal(noUvMesh.material, fallback);
     assert.equal(fallback.roughness, 0.91);
+    assert.equal(gltfMaterial.roughness, 0.91);
+    assert.equal(gltfMaterial.map.repeat.x, 3);
     assert.equal(texturedMaterial.map.repeat.x, 3);
 
     const removed = structuredClone(updated);
@@ -247,6 +436,7 @@ describe("MaterialRuntimeCache local color maps", () => {
     assert.equal(uvMesh.material, texturedMaterial);
     assert.equal(noUvMesh.material, texturedMaterial);
     assert.equal(fallbackDisposal.count, 1);
+    assert.equal(gltfMaterialDisposal.count, 1);
 
     adapter.dispose();
     materials.dispose();
@@ -264,6 +454,31 @@ async function createLoadedAsset(width, height) {
     new File([pngBytes(width, height)], "texture.png", { type: "image/png" }),
   );
   return { store, descriptor, image };
+}
+
+async function createLoadedAssets(dimensions) {
+  const images = dimensions.map(([width, height]) =>
+    trackedImage(width, height),
+  );
+  let decodeIndex = 0;
+  const store = new MaterialImageAssetStore(async () => {
+    const image = images[decodeIndex];
+    decodeIndex += 1;
+    if (!image) throw new Error("Unexpected material image decode.");
+    return image.image;
+  });
+  const descriptors = [];
+  for (let index = 0; index < dimensions.length; index += 1) {
+    const [width, height] = dimensions[index];
+    descriptors.push(
+      await store.importFile(
+        new File([pngBytes(width, height)], `texture-${index}.png`, {
+          type: "image/png",
+        }),
+      ),
+    );
+  }
+  return { store, descriptors, images };
 }
 
 function createTexturedDefinition(id, descriptor, mapping = {}) {
@@ -289,15 +504,19 @@ function colorMapDescriptor(assetId) {
   };
 }
 
-function createImportedModel() {
+function createImportedModel({
+  id = "imported-scene",
+  assetId = "runtime-asset",
+  format = "glTF",
+} = {}) {
   return createImportedSceneModel({
-    id: "imported-scene",
-    assetId: "runtime-asset",
+    id,
+    assetId,
     name: "Imported textured scene",
-    format: "glTF",
+    format,
     metadata: {
-      fileName: "local.glb",
-      format: "glTF",
+      fileName: format === "glTF" ? "local.glb" : "local.obj",
+      format,
       objectCount: 2,
       triangleCount: 2,
       materialCount: 2,
@@ -348,6 +567,22 @@ function trackDisposeEvent(resource) {
     tracker.count += 1;
   });
   return tracker;
+}
+
+function assertEquivalentUvMapping(
+  bottomLeftTexture,
+  topLeftTexture,
+  u,
+  bottomLeftV,
+) {
+  const bottomLeft = new THREE.Vector2(u, bottomLeftV).applyMatrix3(
+    bottomLeftTexture.matrix,
+  );
+  const topLeft = new THREE.Vector2(u, 1 - bottomLeftV).applyMatrix3(
+    topLeftTexture.matrix,
+  );
+  assert.ok(nearlyEqual(topLeft.x, bottomLeft.x));
+  assert.ok(nearlyEqual(topLeft.y, bottomLeft.y));
 }
 
 function nearlyEqual(actual, expected) {

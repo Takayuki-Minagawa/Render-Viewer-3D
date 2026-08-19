@@ -101,14 +101,23 @@ export class MaterialImageAssetStore {
 
   async importFile(file: File): Promise<MaterialColorMapModel> {
     this.#assertActive();
-    const header = await inspectMaterialImageFile(file, this.#maxTextureSize);
-    const estimate = estimateResidentBytes(header.width, header.height);
-    this.#reserve(estimate.total);
-
+    let inspectionBytes = 0;
     let image: DecodedMaterialImage | undefined;
-    let reservedBytes = estimate.total;
+    let reservedBytes = 0;
     let committed = false;
     try {
+      if (file.size > 0 && file.size <= MATERIAL_TEXTURE_MAX_FILE_BYTES) {
+        this.#reserve(file.size);
+        inspectionBytes = file.size;
+      }
+      const header = await inspectMaterialImageFile(file, this.#maxTextureSize);
+      this.#releaseReservation(inspectionBytes);
+      inspectionBytes = 0;
+      this.#assertActive();
+
+      const estimate = estimateResidentBytes(header.width, header.height);
+      this.#reserve(estimate.total);
+      reservedBytes = estimate.total;
       image = await this.#decode(file);
       this.#assertDecodedDimensions(image);
       if (this.#disposed) {
@@ -141,7 +150,8 @@ export class MaterialImageAssetStore {
       }
       const result = structuredClone(descriptor);
       const source = new THREE.Source(image);
-      this.#reservedBytes -= reservedBytes;
+      this.#releaseReservation(reservedBytes);
+      reservedBytes = 0;
       this.#residentBytes += actualEstimate.total;
       this.#assets.set(assetId, {
         descriptor,
@@ -159,7 +169,7 @@ export class MaterialImageAssetStore {
       throw error;
     } finally {
       if (!committed) {
-        this.#reservedBytes = Math.max(0, this.#reservedBytes - reservedBytes);
+        this.#releaseReservation(inspectionBytes + reservedBytes);
       }
     }
   }
@@ -277,6 +287,10 @@ export class MaterialImageAssetStore {
       );
     }
     this.#reservedBytes += bytes;
+  }
+
+  #releaseReservation(bytes: number): void {
+    this.#reservedBytes = Math.max(0, this.#reservedBytes - bytes);
   }
 
   #allocateId(): string {

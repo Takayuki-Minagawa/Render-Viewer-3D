@@ -184,6 +184,69 @@ describe("MaterialImageAssetStore validation and budgets", () => {
     store.dispose();
   });
 
+  it("reserves compressed input bytes before starting a parallel read", async () => {
+    const bytes = pngBytes(4, 4);
+    const gate = deferred();
+    let arrayBufferCalls = 0;
+    const pendingFile = {
+      name: "pending.png",
+      type: "image/png",
+      size: bytes.byteLength,
+      arrayBuffer() {
+        arrayBufferCalls += 1;
+        return gate.promise;
+      },
+    };
+    const store = new MaterialImageAssetStore(
+      async () => trackedImage(4, 4).image,
+      bytes.byteLength,
+    );
+    const firstFailure = rejectsWithCode(
+      store.importFile(pendingFile),
+      "resident-limit",
+    );
+
+    await waitFor(() => arrayBufferCalls === 1);
+    assert.equal(store.residentBytes, bytes.byteLength);
+    await rejectsWithCode(store.importFile(pendingFile), "resident-limit");
+    assert.equal(arrayBufferCalls, 1);
+
+    gate.resolve(bytes.slice().buffer);
+    await firstFailure;
+    assert.equal(store.residentBytes, 0);
+    store.dispose();
+  });
+
+  it("does not start decoding when disposed during image preflight", async () => {
+    const bytes = pngBytes(4, 4);
+    const gate = deferred();
+    let arrayBufferCalls = 0;
+    let decodeCalls = 0;
+    const pendingFile = {
+      name: "dispose-pending.png",
+      type: "image/png",
+      size: bytes.byteLength,
+      arrayBuffer() {
+        arrayBufferCalls += 1;
+        return gate.promise;
+      },
+    };
+    const store = new MaterialImageAssetStore(async () => {
+      decodeCalls += 1;
+      return trackedImage(4, 4).image;
+    });
+    const failure = rejectsWithCode(store.importFile(pendingFile), "disposed");
+
+    await waitFor(() => arrayBufferCalls === 1);
+    assert.equal(store.residentBytes, bytes.byteLength);
+    store.dispose();
+    assert.equal(store.residentBytes, 0);
+    gate.resolve(bytes.slice().buffer);
+    await failure;
+    assert.equal(decodeCalls, 0);
+    assert.equal(store.residentBytes, 0);
+  });
+
   it("closes decoded images and releases reservations on post-decode rejection", async () => {
     const invalid = trackedImage(0, 4);
     const store = new MaterialImageAssetStore(async () => invalid.image, 1024);

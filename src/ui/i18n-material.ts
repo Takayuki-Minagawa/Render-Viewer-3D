@@ -52,6 +52,17 @@ const japaneseMaterialMessages = {
   "material.textureBusy": "画像を処理しています…",
   "material.textureSuccess": "画像を適用しました。",
   "material.textureError": "画像を適用できませんでした。",
+  "material.textureErrorEmpty": "画像ファイルが空です。",
+  "material.textureErrorTooLarge": "画像が許容サイズまたは寸法を超えています。",
+  "material.textureErrorMimeMismatch": "ファイル形式と画像データが一致しません。",
+  "material.textureErrorAnimated": "アニメーション画像には対応していません。",
+  "material.textureErrorUnsupported": "PNG / JPEG / WebP の静止画像を選択してください。",
+  "material.textureErrorInvalid": "画像データを読み取れませんでした。",
+  "material.textureErrorMemory": "画像用メモリの上限を超えます。別の画像を解除するか、小さい画像を選択してください。",
+  "material.textureErrorDecoder": "このブラウザでは画像を処理できません。",
+  "material.textureErrorMaterialMissing": "対象のマテリアルが見つかりません。",
+  "material.textureErrorInterrupted": "画像処理は中断されました。",
+  "material.textureErrorUnknown": "予期しないエラーが発生しました。",
 } as const;
 
 type MaterialMessageKey = keyof typeof japaneseMaterialMessages;
@@ -102,6 +113,17 @@ const englishMaterialMessages: Record<MaterialMessageKey, string> = {
   "material.textureBusy": "Processing image…",
   "material.textureSuccess": "Image applied.",
   "material.textureError": "The image could not be applied.",
+  "material.textureErrorEmpty": "The selected image file is empty.",
+  "material.textureErrorTooLarge": "The image exceeds the allowed file-size or dimension limit.",
+  "material.textureErrorMimeMismatch": "The file type does not match the image data.",
+  "material.textureErrorAnimated": "Animated images are not supported.",
+  "material.textureErrorUnsupported": "Choose a static PNG, JPEG, or WebP image.",
+  "material.textureErrorInvalid": "The image data could not be read.",
+  "material.textureErrorMemory": "The image memory limit would be exceeded. Remove another image or choose a smaller one.",
+  "material.textureErrorDecoder": "This browser cannot process the image.",
+  "material.textureErrorMaterialMissing": "The target material could not be found.",
+  "material.textureErrorInterrupted": "Image processing was interrupted.",
+  "material.textureErrorUnknown": "An unexpected error occurred.",
 };
 
 const materialMessages: Record<

@@ -858,6 +858,11 @@
   border-radius: 6px;
 }
 
+.material-texture-metadata[hidden],
+.material-texture-mapping[hidden] {
+  display: none;
+}
+
 .material-texture-mapping legend {
   padding: 0 5px;
   color: var(--text-muted);
@@ -912,6 +917,12 @@
 
   .material-texture-picker-button,
   .material-texture-picker .secondary-action,
+  .import-material-open {
+    min-height: 44px;
+  }
+}
+
+@media (pointer: coarse) {
   .import-material-open {
     min-height: 44px;
   }

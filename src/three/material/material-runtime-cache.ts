@@ -21,12 +21,18 @@ import {
 type MaterialDefinitionSnapshot = DeepReadonly<MaterialDefinitionModel>;
 type ColorMapSnapshot = DeepReadonly<MaterialColorMapModel>;
 
+export type MaterialTextureUvOrigin = "bottom-left" | "top-left";
+
 interface MaterialRuntimeEntry {
   readonly material: THREE.MeshPhysicalMaterial;
+  topLeftMaterial?: THREE.MeshPhysicalMaterial;
   fallbackMaterial?: THREE.MeshPhysicalMaterial;
   texture?: THREE.Texture<DecodedMaterialImage>;
   textureAssetId?: string;
+  topLeftTexture?: THREE.Texture<DecodedMaterialImage>;
+  topLeftTextureAssetId?: string;
   textureSignature: string;
+  colorMap: ColorMapSnapshot | null;
   valueSignature: string;
   programSignature: string;
   projection: MaterialProjection;
@@ -60,6 +66,7 @@ export class MaterialRuntimeCache {
         entry = {
           material,
           textureSignature: "",
+          colorMap: null,
           valueSignature: projection.valueSignature,
           programSignature: projection.programSignature,
           projection,
@@ -69,6 +76,9 @@ export class MaterialRuntimeCache {
         this.#entries.set(definition.id, entry);
       } else {
         entry.material.name = definition.name;
+        if (entry.topLeftMaterial) {
+          entry.topLeftMaterial.name = topLeftMaterialName(definition.name);
+        }
         if (entry.valueSignature !== projection.valueSignature) {
           const programChanged =
             entry.programSignature !== projection.programSignature;
@@ -76,10 +86,16 @@ export class MaterialRuntimeCache {
           if (entry.fallbackMaterial) {
             applyMaterialProjection(entry.fallbackMaterial, projection);
           }
+          if (entry.topLeftMaterial) {
+            applyMaterialProjection(entry.topLeftMaterial, projection);
+          }
           if (programChanged) {
             entry.material.needsUpdate = true;
             if (entry.fallbackMaterial) {
               entry.fallbackMaterial.needsUpdate = true;
+            }
+            if (entry.topLeftMaterial) {
+              entry.topLeftMaterial.needsUpdate = true;
             }
           }
           entry.valueSignature = projection.valueSignature;
@@ -103,12 +119,18 @@ export class MaterialRuntimeCache {
     return this.#entries.get(materialId)?.material;
   }
 
-  requireMaterial(materialId: string): THREE.MeshPhysicalMaterial {
-    const material = this.getMaterial(materialId);
-    if (!material) {
+  requireMaterial(
+    materialId: string,
+    uvOrigin: MaterialTextureUvOrigin = "bottom-left",
+  ): THREE.MeshPhysicalMaterial {
+    const entry = this.#entries.get(materialId);
+    if (!entry) {
       throw new Error("Missing material runtime for SceneModel id: " + materialId);
     }
-    return material;
+    if (uvOrigin === "top-left") {
+      return this.#getTopLeftMaterial(entry, materialId);
+    }
+    return entry.material;
   }
 
   requireUntexturedMaterial(materialId: string): THREE.MeshPhysicalMaterial {
@@ -147,8 +169,10 @@ export class MaterialRuntimeCache {
     entry: MaterialRuntimeEntry,
     colorMap: ColorMapSnapshot | null,
   ): void {
+    entry.colorMap = colorMap;
     if (!colorMap) {
       this.#detachTexture(entry);
+      this.#disposeTopLeftMaterial(entry);
       this.#disposeFallback(entry);
       entry.textureSignature = "";
       entry.runtimeDiagnostics = [];
@@ -160,45 +184,129 @@ export class MaterialRuntimeCache {
     );
     if (entry.texture && entry.textureAssetId === colorMap.assetId) {
       if (entry.textureSignature !== signature) {
-        applyTextureMapping(entry.texture, colorMap);
+        applyTextureMapping(entry.texture, colorMap, "bottom-left");
+        if (entry.topLeftTexture) {
+          applyTextureMapping(entry.topLeftTexture, colorMap, "top-left");
+        }
         entry.textureSignature = signature;
       }
       entry.runtimeDiagnostics = [];
       return;
     }
 
-    const lease = this.#images?.acquire(colorMap.assetId);
-    if (!lease) {
-      this.#detachTexture(entry);
-      this.#disposeFallback(entry);
-      entry.textureSignature = signature;
-      entry.runtimeDiagnostics = [
-        {
-          path: "preview.colorMap",
-          code: "preview.color-map.asset-unavailable",
-          support: "stored-only",
-        },
-      ];
+    const texture = this.#createTexture(colorMap, "bottom-left");
+    if (!texture) {
+      this.#markTextureUnavailable(entry, signature);
       return;
     }
 
-    const texture = new THREE.Texture<DecodedMaterialImage>();
-    texture.source = lease.source;
-    texture.name = colorMap.sourceName;
-    texture.userData.materialTextureAssetId = colorMap.assetId;
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.flipY = false;
-    applyTextureMapping(texture, colorMap);
-    texture.needsUpdate = true;
+    let topLeftTexture: THREE.Texture<DecodedMaterialImage> | undefined;
+    try {
+      if (entry.topLeftMaterial) {
+        topLeftTexture = this.#createTexture(colorMap, "top-left");
+      }
+    } catch (error) {
+      texture.dispose();
+      this.#images?.release(colorMap.assetId);
+      throw error;
+    }
+    if (entry.topLeftMaterial && !topLeftTexture) {
+      texture.dispose();
+      this.#images?.release(colorMap.assetId);
+      this.#markTextureUnavailable(entry, signature);
+      return;
+    }
 
     const hadTexture = Boolean(entry.texture);
+    const hadTopLeftTexture = Boolean(entry.topLeftTexture);
     this.#detachTexture(entry);
+    this.#detachTopLeftTexture(entry);
     entry.texture = texture;
     entry.textureAssetId = colorMap.assetId;
     entry.textureSignature = signature;
     entry.material.map = texture;
     if (!hadTexture) entry.material.needsUpdate = true;
+    if (entry.topLeftMaterial && topLeftTexture) {
+      entry.topLeftTexture = topLeftTexture;
+      entry.topLeftTextureAssetId = colorMap.assetId;
+      entry.topLeftMaterial.map = topLeftTexture;
+      if (!hadTopLeftTexture) entry.topLeftMaterial.needsUpdate = true;
+    }
     entry.runtimeDiagnostics = [];
+  }
+
+  #getTopLeftMaterial(
+    entry: MaterialRuntimeEntry,
+    materialId: string,
+  ): THREE.MeshPhysicalMaterial {
+    const colorMap = entry.colorMap;
+    if (!entry.texture || !colorMap) return entry.material;
+    if (entry.topLeftMaterial && entry.topLeftTexture) {
+      return entry.topLeftMaterial;
+    }
+
+    const texture = this.#createTexture(colorMap, "top-left");
+    if (!texture) return this.requireUntexturedMaterial(materialId);
+
+    let material = entry.topLeftMaterial;
+    try {
+      if (!material) material = createMeshPhysicalMaterial(entry.projection);
+    } catch (error) {
+      texture.dispose();
+      this.#images?.release(colorMap.assetId);
+      throw error;
+    }
+    material.name = topLeftMaterialName(entry.material.name);
+    material.userData.sceneMaterialId = materialId;
+    material.userData.materialTextureUvOrigin = "top-left";
+    material.map = texture;
+    material.needsUpdate = true;
+    entry.topLeftMaterial = material;
+    entry.topLeftTexture = texture;
+    entry.topLeftTextureAssetId = colorMap.assetId;
+    return material;
+  }
+
+  #createTexture(
+    colorMap: ColorMapSnapshot,
+    uvOrigin: MaterialTextureUvOrigin,
+  ): THREE.Texture<DecodedMaterialImage> | undefined {
+    const lease = this.#images?.acquire(colorMap.assetId);
+    if (!lease) return undefined;
+
+    const texture = new THREE.Texture<DecodedMaterialImage>();
+    try {
+      texture.source = lease.source;
+      texture.name = colorMap.sourceName;
+      texture.userData.materialTextureAssetId = colorMap.assetId;
+      texture.userData.materialTextureUvOrigin = uvOrigin;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.flipY = false;
+      applyTextureMapping(texture, colorMap, uvOrigin, false);
+      texture.needsUpdate = true;
+      return texture;
+    } catch (error) {
+      texture.dispose();
+      this.#images?.release(colorMap.assetId);
+      throw error;
+    }
+  }
+
+  #markTextureUnavailable(
+    entry: MaterialRuntimeEntry,
+    signature: string,
+  ): void {
+    this.#detachTexture(entry);
+    this.#disposeTopLeftMaterial(entry);
+    this.#disposeFallback(entry);
+    entry.textureSignature = signature;
+    entry.runtimeDiagnostics = [
+      {
+        path: "preview.colorMap",
+        code: "preview.color-map.asset-unavailable",
+        support: "stored-only",
+      },
+    ];
   }
 
   #detachTexture(entry: MaterialRuntimeEntry): void {
@@ -220,6 +328,33 @@ export class MaterialRuntimeCache {
     entry.textureAssetId = undefined;
   }
 
+  #detachTopLeftTexture(entry: MaterialRuntimeEntry): void {
+    const texture = entry.topLeftTexture;
+    const assetId = entry.topLeftTextureAssetId;
+    if (!texture || !assetId) {
+      if (entry.topLeftMaterial) entry.topLeftMaterial.map = null;
+      entry.topLeftTexture = undefined;
+      entry.topLeftTextureAssetId = undefined;
+      return;
+    }
+
+    if (entry.topLeftMaterial) {
+      const hadMap = entry.topLeftMaterial.map !== null;
+      entry.topLeftMaterial.map = null;
+      if (hadMap) entry.topLeftMaterial.needsUpdate = true;
+    }
+    texture.dispose();
+    this.#images?.release(assetId);
+    entry.topLeftTexture = undefined;
+    entry.topLeftTextureAssetId = undefined;
+  }
+
+  #disposeTopLeftMaterial(entry: MaterialRuntimeEntry): void {
+    this.#detachTopLeftTexture(entry);
+    entry.topLeftMaterial?.dispose();
+    entry.topLeftMaterial = undefined;
+  }
+
   #disposeFallback(entry: MaterialRuntimeEntry): void {
     entry.fallbackMaterial?.dispose();
     entry.fallbackMaterial = undefined;
@@ -227,6 +362,7 @@ export class MaterialRuntimeCache {
 
   #disposeEntry(entry: MaterialRuntimeEntry): void {
     this.#detachTexture(entry);
+    this.#disposeTopLeftMaterial(entry);
     this.#disposeFallback(entry);
     entry.material.dispose();
   }
@@ -238,11 +374,20 @@ export class MaterialRuntimeCache {
   }
 }
 
+const TOP_LEFT_UV_Y_FLIP_MATRIX = new THREE.Matrix3().set(
+  1, 0, 0,
+  0, -1, 1,
+  0, 0, 1,
+);
+
 function applyTextureMapping(
   texture: THREE.Texture,
   colorMap: ColorMapSnapshot,
+  uvOrigin: MaterialTextureUvOrigin,
+  notifyWrapChange = true,
 ): void {
   const wrapping = toThreeWrapping(colorMap.wrapMode);
+  const wrapChanged = texture.wrapS !== wrapping || texture.wrapT !== wrapping;
   texture.wrapS = wrapping;
   texture.wrapT = wrapping;
   texture.repeat.set(colorMap.repeatX, colorMap.repeatY);
@@ -250,7 +395,15 @@ function applyTextureMapping(
   texture.center.set(0.5, 0.5);
   texture.rotation = THREE.MathUtils.degToRad(colorMap.rotationDegrees);
   texture.updateMatrix();
-  texture.needsUpdate = true;
+  texture.matrixAutoUpdate = uvOrigin === "bottom-left";
+  if (uvOrigin === "top-left") {
+    texture.matrix.multiply(TOP_LEFT_UV_Y_FLIP_MATRIX);
+  }
+  if (notifyWrapChange && wrapChanged) texture.needsUpdate = true;
+}
+
+function topLeftMaterialName(name: string): string {
+  return name + " (top-left UV origin)";
 }
 
 function toThreeWrapping(mode: MaterialTextureWrapMode): THREE.Wrapping {

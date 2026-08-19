@@ -66,8 +66,14 @@ export class MaterialTextureController {
       }
 
       let attached = false;
+      let publishedColorMap: MaterialColorMapModel | undefined;
       this.#sceneStore.update((draft) => {
-        attached = attachMaterialColorMap(draft, materialId, colorMap!);
+        const material = draft.materials.find(({ id }) => id === materialId);
+        const nextColorMap = material?.colorMap
+          ? inheritMaterialColorMapMapping(material.colorMap, colorMap!)
+          : colorMap!;
+        attached = attachMaterialColorMap(draft, materialId, nextColorMap);
+        if (attached) publishedColorMap = nextColorMap;
       });
       if (!attached) {
         throw new MaterialTextureControllerError(
@@ -76,7 +82,7 @@ export class MaterialTextureController {
         );
       }
       this.releaseUnused();
-      return colorMap;
+      return publishedColorMap;
     } catch (error) {
       if (colorMap && !this.#isAssetReferenced(colorMap.assetId)) {
         this.#assets.delete(colorMap.assetId);
@@ -178,4 +184,19 @@ export class MaterialTextureController {
       );
     }
   }
+}
+
+function inheritMaterialColorMapMapping(
+  previous: MaterialColorMapModel,
+  replacement: MaterialColorMapModel,
+): MaterialColorMapModel {
+  return {
+    ...replacement,
+    repeatX: previous.repeatX,
+    repeatY: previous.repeatY,
+    offsetX: previous.offsetX,
+    offsetY: previous.offsetY,
+    rotationDegrees: previous.rotationDegrees,
+    wrapMode: previous.wrapMode,
+  };
 }

@@ -65,6 +65,7 @@ interface MaterialListViewItem extends MaterialLibraryItem {
 
 type MaterialRenderFocus =
   | { readonly kind: "list"; readonly materialId: string }
+  | { readonly kind: "texture"; readonly materialId: string }
   | { readonly kind: "assign" }
   | { readonly kind: "makeUnique" }
   | { readonly kind: "delete" };
@@ -765,6 +766,10 @@ export class MaterialLibraryView {
     }
     const materialId = active.dataset.materialSelect;
     if (materialId) return { kind: "list", materialId };
+    const textureMaterialId = active.dataset.materialTextureInput;
+    if (textureMaterialId) {
+      return { kind: "texture", materialId: textureMaterialId };
+    }
     if (active.dataset.assignMaterial) return { kind: "assign" };
     if (active.dataset.makeMaterialUnique) return { kind: "makeUnique" };
     if (active.dataset.deleteMaterial) return { kind: "delete" };
@@ -777,6 +782,18 @@ export class MaterialLibraryView {
       if (!this.#dialog.open) return;
       if (focus.kind === "list") {
         this.#focusMaterialListItem(focus.materialId);
+        return;
+      }
+      if (focus.kind === "texture") {
+        const input = [
+          ...this.#detail.querySelectorAll<HTMLInputElement>(
+            "[data-material-texture-input]",
+          ),
+        ].find(
+          (candidate) =>
+            candidate.dataset.materialTextureInput === focus.materialId,
+        );
+        input?.focus();
         return;
       }
       if (focus.kind === "assign") {

@@ -6,7 +6,9 @@ import { createServer } from "vite";
 let MATERIAL_TEXTURE_FILE_ACCEPT;
 let appShellSource;
 let basicEditorSource;
+let libraryCssSource;
 let libraryViewSource;
+let materialTextureErrorDetail;
 let sceneEditorSource;
 let server;
 let syncMaterialTextureStatus;
@@ -20,18 +22,27 @@ before(async () => {
   ({ syncMaterialTextureStatus } = await server.ssrLoadModule(
     "/src/ui/material-basic-editor.ts",
   ));
+  ({ materialTextureErrorDetail } = await server.ssrLoadModule(
+    "/src/ui/app-shell.ts",
+  ));
   ({ MATERIAL_TEXTURE_FILE_ACCEPT } = await server.ssrLoadModule(
     "/src/model/material/material-color-map.ts",
   ));
-  [appShellSource, basicEditorSource, libraryViewSource, sceneEditorSource] =
-    await Promise.all(
-      [
-        "../src/ui/app-shell.ts",
-        "../src/ui/material-basic-editor.ts",
-        "../src/ui/material-library-view-base.ts",
-        "../src/ui/scene-editor-view.ts",
-      ].map((path) => readFile(new URL(path, import.meta.url), "utf8")),
-    );
+  [
+    appShellSource,
+    basicEditorSource,
+    libraryCssSource,
+    libraryViewSource,
+    sceneEditorSource,
+  ] = await Promise.all(
+    [
+      "../src/ui/app-shell.ts",
+      "../src/ui/material-basic-editor.ts",
+      "../src/ui/material-library.css",
+      "../src/ui/material-library-view-base.ts",
+      "../src/ui/scene-editor-view.ts",
+    ].map((path) => readFile(new URL(path, import.meta.url), "utf8")),
+  );
 });
 
 after(async () => {
@@ -80,7 +91,28 @@ describe("material texture picker UI", () => {
       source,
       /this\.#materialLibrary\.setTextureStatus\(materialId, \{ kind: "success" \}\);/u,
     );
-    assert.match(source, /kind: "error", detail: importErrorDetail\(error\),/u);
+    assert.match(
+      source,
+      /kind: "error", detail: materialTextureErrorDetail\(error, this\.#preferences\.locale\),/u,
+    );
+  });
+
+  it("restores focus to the texture picker after a detail rebuild", () => {
+    const source = compact(libraryViewSource);
+    assert.match(
+      source,
+      /\| \{ readonly kind: "texture"; readonly materialId: string \}/u,
+    );
+    assert.match(
+      source,
+      /const textureMaterialId = active\.dataset\.materialTextureInput; if \(textureMaterialId\) \{ return \{ kind: "texture", materialId: textureMaterialId \}; \}/u,
+    );
+    assert.match(source, /if \(focus\.kind === "texture"\)/u);
+    assert.match(
+      source,
+      /candidate\.dataset\.materialTextureInput === focus\.materialId/u,
+    );
+    assert.match(source, /input\?\.focus\(\); return;/u);
   });
 
   it("exposes a disabled-until-mapped remove action and clears its status", () => {
@@ -259,6 +291,88 @@ describe("imported custom material library route", () => {
     assert.match(
       syncInspector,
       /if \(open && imported\.customMaterialId\) \{ open\.dataset\.openMaterialLibrary = imported\.customMaterialId; \}/u,
+    );
+  });
+});
+
+describe("material texture CSS regressions", () => {
+  it("keeps hidden texture metadata and mapping out of layout", () => {
+    assert.match(
+      compact(libraryCssSource),
+      /\.material-texture-metadata\[hidden\], \.material-texture-mapping\[hidden\] \{ display: none; \}/u,
+    );
+  });
+
+  it("keeps the imported-material library button touch sized", () => {
+    const coarseStart = libraryCssSource.lastIndexOf("@media (pointer: coarse)");
+    assert.notEqual(coarseStart, -1);
+    assert.match(
+      compact(libraryCssSource.slice(coarseStart)),
+      /\.import-material-open \{ min-height: 44px; \}/u,
+    );
+  });
+});
+
+describe("localized material texture errors", () => {
+  const knownCodes = [
+    "empty-file",
+    "file-too-large",
+    "unsupported-format",
+    "mime-mismatch",
+    "invalid-header",
+    "animated-image",
+    "dimensions-too-large",
+    "decode-failed",
+    "decoded-dimensions-invalid",
+    "resident-limit",
+    "decoder-unavailable",
+    "material-missing",
+    "disposed",
+  ];
+
+  it("maps every load and controller code without exposing raw messages", () => {
+    const genericJa = materialTextureErrorDetail(new Error("RAW ENGLISH"), "ja");
+    const genericEn = materialTextureErrorDetail(new Error("RAW ENGLISH"), "en");
+
+    for (const code of knownCodes) {
+      const error = { code, message: "RAW ENGLISH" };
+      const ja = materialTextureErrorDetail(error, "ja");
+      const en = materialTextureErrorDetail(error, "en");
+      assert.notEqual(ja, genericJa, code);
+      assert.notEqual(en, genericEn, code);
+      assert.doesNotMatch(ja, /RAW ENGLISH/u, code);
+      assert.doesNotMatch(en, /RAW ENGLISH/u, code);
+    }
+
+    assert.equal(
+      materialTextureErrorDetail({ code: "unsupported-format" }, "ja"),
+      "PNG / JPEG / WebP の静止画像を選択してください。",
+    );
+    assert.equal(
+      materialTextureErrorDetail({ code: "material-missing" }, "en"),
+      "The target material could not be found.",
+    );
+  });
+
+  it("uses a localized generic message for unknown and hostile errors", () => {
+    const throwing = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("RAW ENGLISH");
+        },
+      },
+    );
+    assert.equal(
+      materialTextureErrorDetail(
+        { code: "future-code", message: "RAW ENGLISH" },
+        "ja",
+      ),
+      "予期しないエラーが発生しました。",
+    );
+    assert.equal(
+      materialTextureErrorDetail(throwing, "en"),
+      "An unexpected error occurred.",
     );
   });
 });

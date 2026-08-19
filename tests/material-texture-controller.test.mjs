@@ -68,6 +68,43 @@ describe("MaterialTextureController", () => {
     assert.deepEqual(sceneStore.getSnapshot(), beforeInvalidUpdate);
   });
 
+  it("preserves the latest mapping settings when replacing an image", async () => {
+    const scene = createDefaultSceneModel();
+    const materialId = scene.materials[0].id;
+    const original = createDescriptor("mapping-old");
+    scene.materials[0].colorMap = original;
+    const sceneStore = new SceneStore(scene);
+    const assets = createAssetStoreDouble();
+    assets.seed(original);
+    const controller = new MaterialTextureController(sceneStore, assets);
+
+    const attaching = controller.attach(materialId, createFile("mapping-new.png"));
+    controller.update(materialId, "repeatX", 4.5);
+    controller.update(materialId, "repeatY", 2.25);
+    controller.update(materialId, "offsetX", -0.75);
+    controller.update(materialId, "offsetY", 0.125);
+    controller.update(materialId, "rotationDegrees", 37);
+    controller.update(materialId, "wrapMode", "mirrored-repeat");
+    const replacement = createDescriptor("mapping-new");
+    assets.resolve(0, replacement);
+
+    const result = await attaching;
+    const stored = findMaterial(sceneStore, materialId).colorMap;
+    const expected = {
+      ...replacement,
+      repeatX: 4.5,
+      repeatY: 2.25,
+      offsetX: -0.75,
+      offsetY: 0.125,
+      rotationDegrees: 37,
+      wrapMode: "mirrored-repeat",
+    };
+    assert.deepEqual(result, expected);
+    assert.deepEqual(stored, expected);
+    assert.equal(assets.has("mapping-old"), false);
+    assert.equal(assets.has("mapping-new"), true);
+  });
+
   it("rolls back a decoded asset when scene publication fails", async () => {
     const snapshot = createDefaultSceneModel();
     const materialId = snapshot.materials[0].id;

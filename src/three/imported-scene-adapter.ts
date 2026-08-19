@@ -11,7 +11,10 @@ import {
   type ImportedAssetRuntime,
   type ImportedMesh,
 } from "./imported-asset-store";
-import { MaterialRuntimeCache } from "./material/material-runtime-cache";
+import {
+  MaterialRuntimeCache,
+  type MaterialTextureUvOrigin,
+} from "./material/material-runtime-cache";
 
 interface ImportedSceneEntry {
   readonly assetId: string;
@@ -211,14 +214,23 @@ export class ImportedSceneAdapter {
             `Custom material mode requires a material id for imported scene: ${model.id}`,
           );
         }
-        const material = this.#materials.requireMaterial(materialId);
-        const fallback = material.map
+        const defaultMaterial = this.#materials.requireMaterial(materialId);
+        const fallback = defaultMaterial.map
           ? this.#materials.requireUntexturedMaterial(materialId)
-          : material;
+          : defaultMaterial;
+        const uvOrigin = textureUvOriginForFormat(model.format);
+        let texturedMaterial =
+          uvOrigin === "bottom-left" ? defaultMaterial : undefined;
         asset.forEachMesh((mesh) => {
-          mesh.material = hasUsableTextureCoordinates(mesh.geometry)
-            ? material
-            : fallback;
+          if (!hasUsableTextureCoordinates(mesh.geometry)) {
+            mesh.material = fallback;
+            return;
+          }
+          texturedMaterial ??= this.#materials.requireMaterial(
+            materialId,
+            uvOrigin,
+          );
+          mesh.material = texturedMaterial;
         });
       }
     }
@@ -255,7 +267,12 @@ function importedMaterialSignature(
     model.customMaterialId,
     customMaterial?.colorMap?.assetId ?? null,
     runtimeHasColorMap,
+    textureUvOriginForFormat(model.format),
   ]);
+}
+
+function textureUvOriginForFormat(format: string): MaterialTextureUvOrigin {
+  return format === "glTF" ? "top-left" : "bottom-left";
 }
 
 function hasUsableTextureCoordinates(

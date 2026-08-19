@@ -23,7 +23,7 @@ import {
   hasDraggedFiles,
   importErrorDetail,
 } from "./import-ui-state";
-import { translate, type MessageKey } from "./i18n";
+import { translate, type AppLocale, type MessageKey } from "./i18n";
 import {
   MaterialLibraryView,
   type MaterialPreviewField,
@@ -147,6 +147,44 @@ const MATERIAL_COLOR_MAP_FIELDS = new Set<MaterialColorMapField>([
   "rotationDegrees",
   "wrapMode",
 ]);
+const MATERIAL_TEXTURE_ERROR_MESSAGES = new Map<string, MessageKey>([
+  ["empty-file", "material.textureErrorEmpty"],
+  ["file-too-large", "material.textureErrorTooLarge"],
+  ["dimensions-too-large", "material.textureErrorTooLarge"],
+  ["mime-mismatch", "material.textureErrorMimeMismatch"],
+  ["animated-image", "material.textureErrorAnimated"],
+  ["unsupported-format", "material.textureErrorUnsupported"],
+  ["invalid-header", "material.textureErrorInvalid"],
+  ["decode-failed", "material.textureErrorInvalid"],
+  ["decoded-dimensions-invalid", "material.textureErrorInvalid"],
+  ["resident-limit", "material.textureErrorMemory"],
+  ["decoder-unavailable", "material.textureErrorDecoder"],
+  ["material-missing", "material.textureErrorMaterialMissing"],
+  ["disposed", "material.textureErrorInterrupted"],
+]);
+
+export function materialTextureErrorDetail(
+  error: unknown,
+  locale: AppLocale,
+): string {
+  let code: unknown;
+  if (
+    (typeof error === "object" && error !== null) ||
+    typeof error === "function"
+  ) {
+    try {
+      code = Reflect.get(error, "code");
+    } catch {
+      code = undefined;
+    }
+  }
+  const key =
+    typeof code === "string"
+      ? MATERIAL_TEXTURE_ERROR_MESSAGES.get(code)
+      : undefined;
+  return translate(locale, key ?? "material.textureErrorUnknown");
+}
+
 const TRANSFORM_GROUPS = new Set<TransformGroup>([
   "position",
   "rotationDegrees",
@@ -649,7 +687,7 @@ export class AppShell {
       console.error("Material texture loading failed.", error);
       this.#materialLibrary.setTextureStatus(materialId, {
         kind: "error",
-        detail: importErrorDetail(error),
+        detail: materialTextureErrorDetail(error, this.#preferences.locale),
       });
     }
   }

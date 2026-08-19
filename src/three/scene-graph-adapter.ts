@@ -1,14 +1,17 @@
 import * as THREE from "three";
 import type { SceneSnapshot } from "../model/scene-model";
 import { createGeometry, geometrySignature } from "./geometry-factory";
+import type { MaterialProjectionDiagnostic } from "./material/material-projector";
+import { MaterialRuntimeCache } from "./material/material-runtime-cache";
 
 type ObjectModel = SceneSnapshot["objects"][number];
 type LightModel = SceneSnapshot["lights"][number];
 type DirectionalLightModel = Extract<LightModel, { type: "directional" }>;
 
 interface MeshEntry {
-  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>;
   geometrySignature: string;
+  materialId: string;
 }
 
 type LightEntry =
@@ -23,6 +26,7 @@ export class SceneGraphAdapter {
   readonly #scene: THREE.Scene;
   readonly #objects = new Map<string, MeshEntry>();
   readonly #lights = new Map<string, LightEntry>();
+  readonly #materials = new MaterialRuntimeCache();
 
   constructor(scene: THREE.Scene) {
     this.#scene = scene;
@@ -31,9 +35,14 @@ export class SceneGraphAdapter {
   applyModel(
     objectModels: SceneSnapshot["objects"],
     lightModels: SceneSnapshot["lights"],
+    materialModels: SceneSnapshot["materials"],
   ): void {
+    const materialIds = this.#collectUniqueIds(materialModels, "material");
     const objectIds = this.#collectUniqueIds(objectModels, "object");
     const lightIds = this.#collectUniqueIds(lightModels, "light");
+    this.#validateMaterialReferences(objectModels, materialIds);
+
+    this.#materials.reconcile(materialModels);
     this.#reconcileObjects(objectModels, objectIds);
     this.#reconcileLights(lightModels, lightIds);
   }
@@ -50,11 +59,18 @@ export class SceneGraphAdapter {
     return objects;
   }
 
+  getMaterialDiagnostics(
+    materialId: string,
+  ): readonly MaterialProjectionDiagnostic[] {
+    return this.#materials.getDiagnostics(materialId);
+  }
+
   dispose(): void {
     for (const entry of this.#objects.values()) this.#removeObject(entry);
     for (const entry of this.#lights.values()) this.#removeLight(entry);
     this.#objects.clear();
     this.#lights.clear();
+    this.#materials.dispose();
   }
 
   #reconcileObjects(
@@ -69,12 +85,19 @@ export class SceneGraphAdapter {
         entry = this.#createObject(model, nextSignature);
         this.#objects.set(model.id, entry);
         this.#scene.add(entry.mesh);
-      } else if (entry.geometrySignature !== nextSignature) {
-        const nextGeometry = createGeometry(model.geometry);
-        const previousGeometry = entry.mesh.geometry;
-        entry.mesh.geometry = nextGeometry;
-        entry.geometrySignature = nextSignature;
-        previousGeometry.dispose();
+      } else {
+        if (entry.geometrySignature !== nextSignature) {
+          const nextGeometry = createGeometry(model.geometry);
+          const previousGeometry = entry.mesh.geometry;
+          entry.mesh.geometry = nextGeometry;
+          entry.geometrySignature = nextSignature;
+          previousGeometry.dispose();
+        }
+
+        if (entry.materialId !== model.materialId) {
+          entry.mesh.material = this.#materials.requireMaterial(model.materialId);
+          entry.materialId = model.materialId;
+        }
       }
 
       this.#applyObject(entry.mesh, model);
@@ -119,15 +142,17 @@ export class SceneGraphAdapter {
     return {
       mesh: new THREE.Mesh(
         createGeometry(model.geometry),
-        new THREE.MeshStandardMaterial(),
+        this.#materials.requireMaterial(model.materialId),
       ),
       geometrySignature: signature,
+      materialId: model.materialId,
     };
   }
 
   #applyObject(mesh: MeshEntry["mesh"], model: ObjectModel): void {
     mesh.name = model.name;
     mesh.userData.sceneModelId = model.id;
+    mesh.userData.sceneMaterialId = model.materialId;
     mesh.visible = model.visible;
     mesh.position.set(
       model.transform.position.x,
@@ -146,9 +171,6 @@ export class SceneGraphAdapter {
     );
     mesh.castShadow = model.castShadow;
     mesh.receiveShadow = model.receiveShadow;
-    mesh.material.color.set(model.material.color);
-    mesh.material.metalness = model.material.metalness;
-    mesh.material.roughness = model.material.roughness;
   }
 
   #createLight(model: LightModel): LightEntry {
@@ -202,7 +224,6 @@ export class SceneGraphAdapter {
   #removeObject(entry: MeshEntry): void {
     this.#scene.remove(entry.mesh);
     entry.mesh.geometry.dispose();
-    entry.mesh.material.dispose();
   }
 
   #removeLight(entry: LightEntry): void {
@@ -210,6 +231,18 @@ export class SceneGraphAdapter {
     if (entry.type === "directional") {
       this.#scene.remove(entry.target);
       entry.light.shadow.map?.dispose();
+    }
+  }
+
+  #validateMaterialReferences(
+    models: SceneSnapshot["objects"],
+    materialIds: ReadonlySet<string>,
+  ): void {
+    for (const model of models) {
+      if (materialIds.has(model.materialId)) continue;
+      throw new Error(
+        `Missing material id in SceneModel for object ${model.id}: ${model.materialId}`,
+      );
     }
   }
 

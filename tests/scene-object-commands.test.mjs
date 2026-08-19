@@ -62,11 +62,7 @@ describe("scene object factories", () => {
       assert.deepEqual(object.geometry, expected[type]);
       assert.equal(object.visible, true);
       assert.deepEqual(object.transform.scale, { x: 1, y: 1, z: 1 });
-      assert.deepEqual(object.material, {
-        color: "#5f8cff",
-        metalness: 0.08,
-        roughness: 0.32,
-      });
+      assert.equal(object.materialId, `test-${type}-material`);
       assert.equal(object.receiveShadow, true);
       assert.equal(object.castShadow, type !== "plane");
     }
@@ -91,11 +87,15 @@ describe("scene object commands", () => {
 
     assert.equal(box.id, "box-02");
     assert.equal(box.name, "Box 02");
-    assert.equal(sphere.id, "sphere-01");
-    assert.equal(sphere.name, "Sphere 01");
+    assert.equal(sphere.id, "sphere-02");
+    assert.equal(sphere.name, "Sphere 02");
     assert.equal(plane.id, "plane-01");
     assert.equal(plane.name, "Plane 01");
-    assert.equal(new Set(model.objects.map((object) => object.id)).size, 5);
+    assert.equal(new Set(model.objects.map((object) => object.id)).size, 6);
+    assert.equal(new Set(model.materials.map((material) => material.id)).size, 6);
+    for (const object of [box, sphere, plane]) {
+      assert.ok(model.materials.some((material) => material.id === object.materialId));
+    }
   });
 
   it("duplicates deeply with a unique id and name", () => {
@@ -113,7 +113,18 @@ describe("scene object commands", () => {
     assert.equal(second.name, "Box 01 Copy 2");
     assert.notEqual(first.transform, source.transform);
     assert.notEqual(first.geometry, source.geometry);
-    assert.notEqual(first.material, source.material);
+    assert.notEqual(first.materialId, source.materialId);
+    const sourceMaterial = model.materials.find(
+      (material) => material.id === source.materialId,
+    );
+    const firstMaterial = model.materials.find(
+      (material) => material.id === first.materialId,
+    );
+    assert.ok(sourceMaterial);
+    assert.ok(firstMaterial);
+    assert.notEqual(firstMaterial, sourceMaterial);
+    firstMaterial.preview.baseColor = "#123456";
+    assert.notEqual(firstMaterial.preview.baseColor, sourceMaterial.preview.baseColor);
 
     commands.updateSceneObjectTransform(model, first.id, {
       position: { x: 8 },
@@ -151,7 +162,9 @@ describe("scene object commands", () => {
   it("constrains transform values and leaves material untouched", () => {
     const model = createDefaultSceneModel();
     const object = model.objects[0];
-    const material = structuredClone(object.material);
+    const material = structuredClone(
+      model.materials.find((candidate) => candidate.id === object.materialId),
+    );
 
     assert.equal(
       commands.updateSceneObjectTransform(model, object.id, {
@@ -169,7 +182,10 @@ describe("scene object commands", () => {
       z: -360_000,
     });
     assert.deepEqual(object.transform.scale, { x: 0.01, y: 0.01, z: 1_000 });
-    assert.deepEqual(object.material, material);
+    assert.deepEqual(
+      model.materials.find((candidate) => candidate.id === object.materialId),
+      material,
+    );
     assert.equal(
       commands.updateSceneObjectTransform(model, "missing", {
         position: { x: 1 },
@@ -181,7 +197,9 @@ describe("scene object commands", () => {
   it("updates and constrains every geometry variant", () => {
     const model = createDefaultSceneModel();
     const object = model.objects[0];
-    const material = structuredClone(object.material);
+    const material = structuredClone(
+      model.materials.find((candidate) => candidate.id === object.materialId),
+    );
 
     assert.equal(
       commands.updateSceneObjectGeometry(model, object.id, {
@@ -265,7 +283,10 @@ describe("scene object commands", () => {
       radialSegments: 128,
       tubularSegments: 256,
     });
-    assert.deepEqual(object.material, material);
+    assert.deepEqual(
+      model.materials.find((candidate) => candidate.id === object.materialId),
+      material,
+    );
 
     const previous = structuredClone(object.geometry);
     assert.equal(
@@ -291,6 +312,15 @@ describe("scene object commands", () => {
       model.objects.map((object) => [object.id, object.geometry]),
       [
         ["box-01", { type: "box", width: 2, height: 2, depth: 2 }],
+        [
+          "sphere-01",
+          {
+            type: "sphere",
+            radius: 1,
+            widthSegments: 32,
+            heightSegments: 16,
+          },
+        ],
         ["ground-01", { type: "plane", width: 24, height: 24 }],
       ],
     );

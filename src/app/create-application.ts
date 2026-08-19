@@ -1,5 +1,16 @@
 import { createDefaultSceneModel } from "../model/default-scene";
 import {
+  addMaterial,
+  assignMaterial,
+  deleteMaterial,
+  duplicateMaterial,
+  makeMaterialUnique,
+  renameMaterial,
+  updateMaterialPovScalar,
+  updateMaterialPreviewProperty,
+} from "../model/material/material-commands";
+import { getMaterialPreset } from "../model/material/material-presets";
+import {
   addSceneObject,
   deleteSceneObject,
   duplicateSceneObject,
@@ -136,12 +147,54 @@ export function createApplication(root: HTMLElement): Application {
         store.update((draft) => {
           const index = draft.objects.findIndex(({ id }) => id === objectId);
           if (index < 0 || !deleteSceneObject(draft, objectId)) return;
-          fallbackId = draft.objects[Math.min(index, draft.objects.length - 1)]?.id ?? null;
+          fallbackId =
+            draft.objects[Math.min(index, draft.objects.length - 1)]?.id ?? null;
         });
         if (selectedId === objectId) editorStore.setSelectedObjectId(fallbackId);
       },
       setTransformMode: (mode) => {
         editorStore.setTransformMode(mode);
+      },
+      createMaterialFromPreset: (presetId) => {
+        const presetName = getMaterialPreset(presetId).label.en;
+        store.update((draft) => {
+          addMaterial(draft, { name: presetName, presetId });
+        });
+      },
+      assignMaterial: (objectId, materialId) => {
+        store.update((draft) => {
+          assignMaterial(draft, objectId, materialId);
+        });
+      },
+      duplicateMaterial: (materialId) => {
+        store.update((draft) => {
+          duplicateMaterial(draft, materialId);
+        });
+      },
+      renameMaterial: (materialId, name) => {
+        store.update((draft) => {
+          renameMaterial(draft, materialId, name);
+        });
+      },
+      deleteMaterial: (materialId) => {
+        store.update((draft) => {
+          deleteMaterial(draft, materialId);
+        });
+      },
+      makeMaterialUnique: (objectId) => {
+        store.update((draft) => {
+          makeMaterialUnique(draft, objectId);
+        });
+      },
+      updateMaterialPreview: (materialId, field, value) => {
+        store.update((draft) => {
+          updateMaterialPreviewProperty(draft, materialId, field, value);
+        });
+      },
+      updateMaterialPovScalar: (materialId, path, value) => {
+        store.update((draft) => {
+          updateMaterialPovScalar(draft, materialId, path, value);
+        });
       },
     });
 

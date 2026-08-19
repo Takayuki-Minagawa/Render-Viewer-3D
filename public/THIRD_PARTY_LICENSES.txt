@@ -1,23 +1,7 @@
-# Third-party licenses
+Render Viewer 3D - Third-party runtime license notice
 
-Render Viewer 3D uses the following third-party packages. Runtime code is
-bundled locally; the application does not require an external CDN.
-
-| Package | Declared version range | Use | License | Project |
-| --- | --- | --- | --- | --- |
-| Three.js | `^0.185.1` | Browser runtime | MIT | <https://threejs.org/> |
-| @types/three | `^0.185.4` | Development type declarations | MIT | <https://github.com/DefinitelyTyped/DefinitelyTyped> |
-| Vite | `^6.4.3` | Development and build tool | MIT | <https://vite.dev/> |
-| TypeScript | `^5.9.3` | Development compiler | Apache-2.0 | <https://www.typescriptlang.org/> |
-
-Exact resolved versions are recorded in `package-lock.json`. The complete
-license files for installed development packages are available in their
-respective package directories after running `npm ci`.
-
-The GitHub Pages artifact includes `THIRD_PARTY_LICENSES.txt`, containing the
-following notice for the Three.js runtime code distributed with the app.
-
-## Three.js 0.185.1
+Three.js 0.185.1
+https://threejs.org/
 
 The MIT License
 

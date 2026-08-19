@@ -9,6 +9,7 @@ let geometrySignature;
 let SceneGraphAdapter;
 let createDefaultGeometry;
 let createDefaultSceneObject;
+let createMaterialDefinition;
 let geometryTypes;
 
 before(async () => {
@@ -32,6 +33,9 @@ before(async () => {
     createDefaultSceneObject,
     SCENE_OBJECT_GEOMETRY_TYPES: geometryTypes,
   } = commands);
+  ({ createMaterialDefinition } = await server.ssrLoadModule(
+    "/src/model/material/material-presets.ts",
+  ));
 });
 
 after(async () => {
@@ -94,8 +98,14 @@ describe("SceneGraphAdapter geometry reconciliation", () => {
     const objects = geometryTypes.map((type) =>
       createDefaultSceneObject(type, `shape-${type}`),
     );
+    const materials = objects.map((object) =>
+      createMaterialDefinition(
+        object.materialId,
+        `${object.name} Material`,
+      ),
+    );
 
-    adapter.applyModel(objects, []);
+    adapter.applyModel(objects, [], materials);
 
     const initialGeometries = new Map();
     const initialDisposed = new Map();
@@ -114,7 +124,7 @@ describe("SceneGraphAdapter geometry reconciliation", () => {
       object.name = `${object.name} renamed`;
       object.transform.position.x += 2;
     }
-    adapter.applyModel(equalGeometryModels, []);
+    adapter.applyModel(equalGeometryModels, [], materials);
 
     for (const object of equalGeometryModels) {
       const mesh = findMesh(adapter, object.id);
@@ -128,7 +138,7 @@ describe("SceneGraphAdapter geometry reconciliation", () => {
     for (const object of changedValueModels) {
       changeOneGeometryValue(object.geometry);
     }
-    adapter.applyModel(changedValueModels, []);
+    adapter.applyModel(changedValueModels, [], materials);
 
     const valueChangedGeometries = new Map();
     const valueChangedDisposed = new Map();
@@ -149,7 +159,7 @@ describe("SceneGraphAdapter geometry reconciliation", () => {
       const nextType = geometryTypes[(index + 1) % geometryTypes.length];
       typeChangedModels[index].geometry = createDefaultGeometry(nextType);
     }
-    adapter.applyModel(typeChangedModels, []);
+    adapter.applyModel(typeChangedModels, [], materials);
 
     for (const object of typeChangedModels) {
       const mesh = findMesh(adapter, object.id);

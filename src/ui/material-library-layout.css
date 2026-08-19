@@ -1,0 +1,3 @@
+.material-filter-grid.is-category-only {
+  grid-template-columns: minmax(0, 1fr);
+}

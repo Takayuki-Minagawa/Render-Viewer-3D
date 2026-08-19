@@ -10,6 +10,10 @@ import type {
 } from "../model/scene-model";
 import { SceneGraphAdapter } from "./scene-graph-adapter";
 import { SceneInteractionAdapter } from "./scene-interaction-adapter";
+import {
+  createNeutralEnvironment,
+  type NeutralEnvironment,
+} from "./material/neutral-environment";
 
 interface CameraPose {
   position: Vec3Model;
@@ -29,6 +33,7 @@ export class SceneAdapter {
   readonly #scene = new THREE.Scene();
   readonly #camera: THREE.PerspectiveCamera;
   readonly #renderer: THREE.WebGLRenderer;
+  readonly #environment: NeutralEnvironment;
   readonly #controls: OrbitControls;
   readonly #sceneGraph: SceneGraphAdapter;
   readonly #interaction: SceneInteractionAdapter;
@@ -47,6 +52,8 @@ export class SceneAdapter {
     this.#onCameraInteractionEnd = options.onCameraInteractionEnd;
     this.#camera = this.#createCamera(model.camera);
     this.#renderer = this.#createRenderer();
+    this.#environment = createNeutralEnvironment(this.#renderer);
+    this.#scene.environment = this.#environment.texture;
     this.#controls = this.#createControls(model.camera);
     this.#sceneGraph = new SceneGraphAdapter(this.#scene);
     this.#interaction = new SceneInteractionAdapter(
@@ -78,7 +85,7 @@ export class SceneAdapter {
     this.#axes.visible = model.helpers.axesVisible;
     this.#applyCamera(model.camera);
 
-    this.#sceneGraph.applyModel(model.objects, model.lights);
+    this.#sceneGraph.applyModel(model.objects, model.lights, model.materials);
     this.#interaction.refreshSelection();
   }
 
@@ -101,6 +108,8 @@ export class SceneAdapter {
     this.#disposeMaterial(this.#grid.material);
     this.#axes.geometry.dispose();
     this.#disposeMaterial(this.#axes.material);
+    this.#scene.environment = null;
+    this.#environment.dispose();
     this.#renderer.dispose();
     this.#renderer.domElement.remove();
   }

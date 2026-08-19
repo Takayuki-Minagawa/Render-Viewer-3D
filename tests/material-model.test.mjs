@@ -109,6 +109,28 @@ describe("material management commands", () => {
     assert.equal(material.assignMaterial(scene, objectId, "missing"), false);
   });
 
+  it("protects remembered imported material overrides while Imported mode is active", () => {
+    const scene = createDefaultSceneModel();
+    const remembered = material.addMaterial(scene, {
+      id: "remembered-import-override",
+      name: "Remembered import override",
+    });
+    scene.imports.push({
+      materialMode: "imported",
+      customMaterialId: remembered.id,
+    });
+
+    assert.equal(material.getMaterialUsageCount(scene, remembered.id), 1);
+    assert.equal(
+      material.getMaterialUsageCounts(scene).get(remembered.id),
+      1,
+    );
+    assert.equal(material.deleteMaterial(scene, remembered.id), "in-use");
+
+    scene.imports[0].customMaterialId = null;
+    assert.equal(material.deleteMaterial(scene, remembered.id), "deleted");
+  });
+
   it("uses the stable English preset label as a unique default name", () => {
     const scene = createDefaultSceneModel();
 
@@ -250,6 +272,7 @@ describe("scene schema migration", () => {
       }),
     };
     delete legacy.materials;
+    delete legacy.imports;
     legacy.objects[0].id = "A B";
     legacy.objects[1].id = "a-b";
     const before = structuredClone(legacy);
@@ -257,6 +280,7 @@ describe("scene schema migration", () => {
     const migrated = material.migrateSceneModel(legacy);
     assert.deepEqual(legacy, before);
     assert.equal(migrated.schemaVersion, 2);
+    assert.deepEqual(migrated.imports, []);
     assert.equal(migrated.materials.length, 2);
     assert.equal(new Set(migrated.objects.map((object) => object.materialId)).size, 2);
     assert.deepEqual(
@@ -388,6 +412,15 @@ describe("scene schema migration", () => {
     assert.deepEqual(migrated, scene);
     assert.notEqual(migrated, scene);
     assert.notEqual(migrated.materials[0].pov, scene.materials[0].pov);
+  });
+
+  it("adds an empty imports collection to historical v2 snapshots", () => {
+    const scene = createDefaultSceneModel();
+    delete scene.imports;
+
+    const migrated = material.migrateSceneModel(scene);
+
+    assert.deepEqual(migrated.imports, []);
   });
 });
 

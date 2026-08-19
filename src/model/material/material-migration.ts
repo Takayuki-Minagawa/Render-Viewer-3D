@@ -22,7 +22,7 @@ export type LegacySceneObjectModelV1 = Omit<
 
 export type LegacySceneModelV1 = Omit<
   SceneModel,
-  "schemaVersion" | "materials" | "objects"
+  "schemaVersion" | "imports" | "materials" | "objects"
 > & {
   schemaVersion: 1;
   objects: LegacySceneObjectModelV1[];
@@ -32,7 +32,11 @@ export function migrateSceneModel(
   source: SceneModel | LegacySceneModelV1,
 ): SceneModel {
   const schemaVersion = (source as { schemaVersion: number }).schemaVersion;
-  if (schemaVersion === 2) return structuredClone(source as SceneModel);
+  if (schemaVersion === 2) {
+    const current = structuredClone(source as SceneModel);
+    current.imports ??= [];
+    return current;
+  }
   if (schemaVersion !== 1) {
     throw new Error(`Unsupported scene schema version: ${String(schemaVersion)}`);
   }
@@ -73,6 +77,7 @@ export function migrateSceneModel(
 
   return {
     ...legacy,
+    imports: [],
     schemaVersion: 2,
     materials,
     objects,

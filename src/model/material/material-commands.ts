@@ -214,23 +214,33 @@ export function updateMaterialPovScalar(
 }
 
 export function getMaterialUsageCount(
-  scene: Pick<SceneModel, "objects">,
+  scene: Pick<SceneModel, "objects" | "imports">,
   materialId: string,
 ): number {
-  return scene.objects.reduce(
+  const objectUsage = scene.objects.reduce(
     (count, object) => count + Number(object.materialId === materialId),
     0,
+  );
+  return scene.imports.reduce(
+    (count, imported) =>
+      count + Number(imported.customMaterialId === materialId),
+    objectUsage,
   );
 }
 
 export function getMaterialUsageCounts(
-  scene: Pick<SceneModel, "materials" | "objects">,
+  scene: Pick<SceneModel, "materials" | "objects" | "imports">,
 ): ReadonlyMap<string, number> {
   const counts = new Map<string, number>(
     scene.materials.map((material) => [material.id, 0] as const),
   );
   for (const object of scene.objects) {
     counts.set(object.materialId, (counts.get(object.materialId) ?? 0) + 1);
+  }
+  for (const imported of scene.imports) {
+    const materialId = imported.customMaterialId;
+    if (!materialId) continue;
+    counts.set(materialId, (counts.get(materialId) ?? 0) + 1);
   }
   return counts;
 }

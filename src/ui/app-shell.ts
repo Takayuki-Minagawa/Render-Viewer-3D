@@ -1,4 +1,10 @@
+import {
+  IMPORT_FILE_ACCEPT,
+  importerRegistry,
+  type ImportOptions,
+} from "../importers";
 import type { EditorState, TransformMode } from "../app/editor-store";
+import type { ImportedMaterialMode } from "../model/imported-scene-model";
 import type { MaterialPresetId } from "../model/material/material-model";
 import type { GeometryModel, SceneSnapshot } from "../model/scene-model";
 import {
@@ -8,6 +14,12 @@ import {
   toggleTheme,
   type AppPreferences,
 } from "./app-preferences";
+import {
+  createImporterDisplayItems,
+  createImportOptions,
+  hasDraggedFiles,
+  importErrorDetail,
+} from "./import-ui-state";
 import { translate, type MessageKey } from "./i18n";
 import {
   MaterialLibraryView,
@@ -24,6 +36,12 @@ export interface AppActions {
   toggleGrid: () => void;
   toggleAxes: () => void;
   resetCamera: () => void;
+  importFiles: (files: readonly File[], options: ImportOptions) => Promise<void>;
+  setImportedMaterialMode: (
+    id: string,
+    mode: ImportedMaterialMode,
+    customMaterialId: string | null,
+  ) => void;
   addObject: (primitive: GeometryModel["type"]) => void;
   selectObject: (id: string | null) => void;
   setObjectVisibility: (id: string, visible: boolean) => void;
@@ -63,6 +81,30 @@ export interface AppActions {
 export type { GeometryNumericKey, TransformAxis, TransformGroup };
 
 type UiStatus = "initializing" | "ready" | "error";
+type ImportNotice =
+  | { kind: "idle" }
+  | { kind: "busy"; fileNames: string }
+  | { kind: "success"; fileNames: string }
+  | { kind: "error"; detail: string };
+
+export type ImportActionResult =
+  | { kind: "success" }
+  | { kind: "error"; error: unknown }
+  | { kind: "disposed" };
+
+export async function runImportActionSafely(
+  action: () => Promise<void>,
+  isActive: () => boolean,
+): Promise<ImportActionResult> {
+  try {
+    await action();
+    return isActive() ? { kind: "success" } : { kind: "disposed" };
+  } catch (error) {
+    return isActive()
+      ? { kind: "error", error }
+      : { kind: "disposed" };
+  }
+}
 
 const GEOMETRY_TYPES = new Set<GeometryModel["type"]>([
   "box",
@@ -120,12 +162,20 @@ export class AppShell {
   readonly #languageButton: HTMLButtonElement;
   readonly #themeButton: HTMLButtonElement;
   readonly #manualDialog: HTMLDialogElement;
+  readonly #importButton: HTMLButtonElement;
+  readonly #importDialog: HTMLDialogElement;
+  readonly #importFileInput: HTMLInputElement;
+  readonly #importStatus: HTMLElement;
+  readonly #dropOverlay: HTMLElement;
   readonly #loadingElement: HTMLElement;
   readonly #statusText: HTMLElement;
   readonly #editorView: SceneEditorView;
   readonly #materialLibrary: MaterialLibraryView;
   #preferences: AppPreferences;
   #status: UiStatus = "initializing";
+  #importBusy = false;
+  #disposed = false;
+  #importNotice: ImportNotice = { kind: "idle" };
   #model: SceneSnapshot | undefined;
   #editorState: EditorState = DEFAULT_EDITOR_STATE;
 
@@ -138,9 +188,15 @@ export class AppShell {
     this.#axesButton = this.#query("[data-action='axes']");
     this.#languageButton = this.#query("[data-action='language']");
     this.#themeButton = this.#query("[data-action='theme']");
+    this.#importButton = this.#query("[data-action='import']");
+    this.#importDialog = this.#query("[data-import-dialog]");
+    this.#importFileInput = this.#query("[data-import-file-input]");
+    this.#importStatus = this.#query("[data-import-status]");
+    this.#dropOverlay = this.#query("[data-drop-overlay]");
     this.#manualDialog = this.#query("[data-manual-dialog]");
     this.#loadingElement = this.#query("[data-loading]");
     this.#statusText = this.#query("[data-status]");
+    this.#importFileInput.accept = IMPORT_FILE_ACCEPT;
     this.#editorView = new SceneEditorView(this.#root);
     this.#materialLibrary = new MaterialLibraryView(this.#root);
     this.#applyPreferences();
@@ -155,6 +211,7 @@ export class AppShell {
       actions.resetCamera,
       options,
     );
+    this.#bindImportEvents(actions, options);
     this.#languageButton.addEventListener(
       "click",
       () => this.#setLocale(toggleLocale(this.#preferences.locale)),
@@ -242,6 +299,7 @@ export class AppShell {
   }
 
   dispose(): void {
+    this.#disposed = true;
     this.#abortController.abort();
     this.#root.replaceChildren();
   }
@@ -253,14 +311,32 @@ export class AppShell {
       this.#editorState,
       this.#preferences.locale,
     );
-    this.#materialLibrary.render(
-      this.#model.materials,
-      this.#model.objects.map(({ id, name, materialId }) => ({
+    const materialAssignments = [
+      ...this.#model.objects.map(({ id, name, materialId }) => ({
         id,
         name,
         materialId,
       })),
-      this.#editorState.selectedObjectId,
+      ...this.#model.imports.flatMap((imported) =>
+        imported.customMaterialId
+          ? [
+              {
+                id: imported.id,
+                name: imported.name,
+                materialId: imported.customMaterialId,
+              },
+            ]
+          : [],
+      ),
+    ];
+    this.#materialLibrary.render(
+      this.#model.materials,
+      materialAssignments,
+      this.#model.objects.some(
+        ({ id }) => id === this.#editorState.selectedObjectId,
+      )
+        ? this.#editorState.selectedObjectId
+        : null,
       this.#preferences.locale,
     );
   }
@@ -384,7 +460,32 @@ export class AppShell {
     }
     if (this.#materialLibrary.handleUiInput(input)) return;
 
+    const importMaterialSelect = input.dataset.importMaterialSelect;
+    if (importMaterialSelect && input instanceof HTMLSelectElement) {
+      const mode = input.dataset.importCurrentMode;
+      if (this.#isImportedMaterialMode(mode)) {
+        actions.setImportedMaterialMode(importMaterialSelect, mode, input.value);
+      }
+      return;
+    }
+
     if (input instanceof HTMLInputElement) {
+      const importMaterialModeId = input.dataset.importMaterialMode;
+      if (
+        importMaterialModeId &&
+        input.type === "radio" &&
+        input.checked &&
+        this.#isImportedMaterialMode(input.value)
+      ) {
+        const materialSelect = this.#findImportMaterialSelect(importMaterialModeId);
+        actions.setImportedMaterialMode(
+          importMaterialModeId,
+          input.value,
+          materialSelect?.value || null,
+        );
+        return;
+      }
+
       const renameMaterialId = input.dataset.renameMaterial;
       if (renameMaterialId) {
         actions.renameMaterial(renameMaterialId, input.value);
@@ -452,14 +553,18 @@ export class AppShell {
 
     const nameId = input.dataset.objectNameInput;
     if (nameId) {
-      const object = this.#model.objects.find((item) => item.id === nameId);
+      const object =
+        this.#model.objects.find((item) => item.id === nameId) ??
+        this.#model.imports.find((item) => item.id === nameId);
       if (object) input.value = object.name;
       return;
     }
 
     const objectId = input.dataset.objectId;
     if (!objectId) return;
-    const object = this.#model.objects.find((item) => item.id === objectId);
+    const primitive = this.#model.objects.find((item) => item.id === objectId);
+    const object =
+      primitive ?? this.#model.imports.find((item) => item.id === objectId);
     if (!object) return;
 
     const group = input.dataset.transformGroup;
@@ -470,8 +575,9 @@ export class AppShell {
     }
 
     const geometryKey = input.dataset.geometryKey;
+    if (!primitive) return;
     if (this.#isGeometryKey(geometryKey)) {
-      const geometry = object.geometry as unknown as Record<
+      const geometry = primitive.geometry as unknown as Record<
         string,
         number | string
       >;
@@ -483,6 +589,7 @@ export class AppShell {
     if (
       event.defaultPrevented ||
       this.#manualDialog.open ||
+      this.#importDialog.open ||
       this.#materialLibrary.isOpen ||
       this.#isEditingTarget(event.target)
     ) {
@@ -491,9 +598,14 @@ export class AppShell {
 
     const key = event.key.toLowerCase();
     const selectedId = this.#editorState.selectedObjectId;
-    if ((event.ctrlKey || event.metaKey) && key === "d" && selectedId) {
+    const primitiveSelected =
+      selectedId !== null &&
+      (this.#model?.objects.some(({ id }) => id === selectedId) ?? false);
+    if (
+      (event.ctrlKey || event.metaKey) && key === "d" && primitiveSelected
+    ) {
       event.preventDefault();
-      actions.duplicateObject(selectedId);
+      actions.duplicateObject(selectedId!);
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -515,6 +627,189 @@ export class AppShell {
     }
   }
 
+  #bindImportEvents(
+    actions: AppActions,
+    options: { signal: AbortSignal },
+  ): void {
+    this.#importButton.addEventListener(
+      "click",
+      () => {
+        if (!this.#importDialog.open) this.#importDialog.showModal();
+      },
+      options,
+    );
+    this.#query<HTMLButtonElement>("[data-action='choose-import-files']")
+      .addEventListener("click", () => this.#importFileInput.click(), options);
+    this.#importDialog.addEventListener(
+      "click",
+      (event) => {
+        if (event.target === this.#importDialog) this.#importDialog.close();
+      },
+      options,
+    );
+    this.#importFileInput.addEventListener(
+      "change",
+      () => {
+        const files = Array.from(this.#importFileInput.files ?? []);
+        this.#importFileInput.value = "";
+        if (files.length === 0) return;
+        this.#importDialog.close();
+        void this.#runImport(files, actions);
+      },
+      options,
+    );
+
+    let dragDepth = 0;
+    const resetDropState = () => {
+      dragDepth = 0;
+      this.#dropOverlay.classList.remove("is-visible");
+      this.viewportElement.classList.remove("is-file-dragging");
+    };
+    this.viewportElement.addEventListener(
+      "dragenter",
+      (event) => {
+        if (!hasDraggedFiles(Array.from(event.dataTransfer?.types ?? []))) return;
+        event.preventDefault();
+        dragDepth += 1;
+        this.#dropOverlay.classList.add("is-visible");
+        this.viewportElement.classList.add("is-file-dragging");
+      },
+      options,
+    );
+    this.viewportElement.addEventListener(
+      "dragover",
+      (event) => {
+        if (!hasDraggedFiles(Array.from(event.dataTransfer?.types ?? []))) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      },
+      options,
+    );
+    this.viewportElement.addEventListener(
+      "dragleave",
+      (event) => {
+        if (!hasDraggedFiles(Array.from(event.dataTransfer?.types ?? []))) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) resetDropState();
+      },
+      options,
+    );
+    this.viewportElement.addEventListener(
+      "drop",
+      (event) => {
+        if (!hasDraggedFiles(Array.from(event.dataTransfer?.types ?? []))) return;
+        event.preventDefault();
+        const files = Array.from(event.dataTransfer?.files ?? []);
+        resetDropState();
+        if (files.length > 0) void this.#runImport(files, actions);
+      },
+      options,
+    );
+  }
+
+  async #runImport(files: readonly File[], actions: AppActions): Promise<void> {
+    if (this.#disposed || this.#importBusy || files.length === 0) return;
+    const fileNames = this.#summarizeFileNames(files);
+    this.#importBusy = true;
+    this.#importNotice = { kind: "busy", fileNames };
+    this.#setImportControlsDisabled(true);
+    this.#renderImportNotice();
+    try {
+      const result = await runImportActionSafely(
+        () => actions.importFiles(files, this.#readImportOptions()),
+        () => !this.#disposed,
+      );
+      if (result.kind === "success") {
+        this.#importNotice = { kind: "success", fileNames };
+      } else if (result.kind === "error") {
+        console.error("Model import failed.", result.error);
+        this.#importNotice = {
+          kind: "error",
+          detail: importErrorDetail(result.error),
+        };
+      }
+    } finally {
+      this.#importBusy = false;
+      if (!this.#disposed) {
+        this.#setImportControlsDisabled(false);
+        this.#renderImportNotice();
+      }
+    }
+  }
+
+  #readImportOptions(): ImportOptions {
+    return createImportOptions({
+      unit: this.#query<HTMLSelectElement>("[data-import-unit]").value,
+      coordinateSystem: this.#query<HTMLSelectElement>(
+        "[data-import-coordinate]",
+      ).value,
+      centerModel: this.#query<HTMLInputElement>("[data-import-center]").checked,
+      placeOnGround: this.#query<HTMLInputElement>("[data-import-ground]").checked,
+      quality: this.#query<HTMLInputElement>(
+        "[name='import-quality']:checked",
+      ).value,
+    });
+  }
+
+  #setImportControlsDisabled(disabled: boolean): void {
+    this.#importButton.disabled = disabled;
+    this.#importFileInput.disabled = disabled;
+    this.#query<HTMLButtonElement>("[data-action='choose-import-files']").disabled =
+      disabled;
+    this.#importDialog.setAttribute("aria-busy", String(disabled));
+  }
+
+  #summarizeFileNames(files: readonly File[]): string {
+    const first = files[0]?.name ?? "";
+    return files.length > 1 ? `${first} (+${files.length - 1})` : first;
+  }
+
+  #renderImportNotice(): void {
+    const notice = this.#importNotice;
+    this.#importStatus.hidden = notice.kind === "idle";
+    this.#importStatus.dataset.kind = notice.kind;
+    if (notice.kind === "idle") {
+      this.#importStatus.textContent = "";
+      return;
+    }
+    const key = `import.status.${notice.kind}` as MessageKey;
+    const detail = notice.kind === "error" ? notice.detail : notice.fileNames;
+    this.#importStatus.textContent = `${translate(
+      this.#preferences.locale,
+      key,
+    )} ${detail}`;
+  }
+
+  #renderImporterList(): void {
+    const list = this.#query<HTMLElement>("[data-import-formats]");
+    const fragment = document.createDocumentFragment();
+    for (const item of createImporterDisplayItems(importerRegistry)) {
+      const row = document.createElement("li");
+      row.dataset.importerId = item.id;
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      row.append(label);
+      if (item.experimental) {
+        const badge = document.createElement("small");
+        badge.textContent = translate(
+          this.#preferences.locale,
+          "import.experimental",
+        );
+        row.append(badge);
+      }
+      fragment.append(row);
+    }
+    list.replaceChildren(fragment);
+  }
+
+  #findImportMaterialSelect(id: string): HTMLSelectElement | undefined {
+    return Array.from(
+      this.#root.querySelectorAll<HTMLSelectElement>(
+        "[data-import-material-select]",
+      ),
+    ).find((select) => select.dataset.importMaterialSelect === id);
+  }
+
   #isEditingTarget(target: EventTarget | null): boolean {
     return (
       target instanceof Element &&
@@ -526,6 +821,12 @@ export class AppShell {
 
   #isGeometryType(value: string | undefined): value is GeometryModel["type"] {
     return value !== undefined && GEOMETRY_TYPES.has(value as GeometryModel["type"]);
+  }
+
+  #isImportedMaterialMode(
+    value: string | undefined,
+  ): value is ImportedMaterialMode {
+    return value === "imported" || value === "custom";
   }
 
   #isMaterialPreset(value: string): value is MaterialPresetId {
@@ -593,6 +894,8 @@ export class AppShell {
     this.#root
       .querySelector<HTMLInputElement>("[data-material-search]")
       ?.setAttribute("placeholder", translate(locale, "material.searchPlaceholder"));
+    this.#renderImporterList();
+    this.#renderImportNotice();
     this.#renderLanguageButton();
     this.#renderThemeButton();
     this.#renderStatus();
@@ -663,7 +966,7 @@ export class AppShell {
         <header class="app-header">
           <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand-copy"><strong>RENDER VIEWER</strong><small data-i18n="brand.subtitle">パラメトリック3Dシーンツール</small></span></div>
           <div class="header-tools">
-            <div class="header-meta"><span class="phase-badge" data-i18n="header.phase">フェーズ 3</span><span class="header-divider" aria-hidden="true"></span><span class="scene-name" data-scene-name>Lighting Study 01</span></div>
+            <div class="header-meta"><span class="phase-badge" data-i18n="header.phase">フェーズ 4</span><span class="header-divider" aria-hidden="true"></span><span class="scene-name" data-scene-name>Lighting Study 01</span></div>
             <div class="header-actions" role="group" data-i18n-aria-label="header.controls" aria-label="表示と言語の設定">
               <button class="header-button" data-action="language" type="button"><i aria-hidden="true">文/A</i><span data-language-label>English</span></button>
               <button class="header-button" data-action="theme" type="button" aria-pressed="false"><i data-theme-icon aria-hidden="true">☀</i><span data-theme-label>ライト</span></button>
@@ -696,11 +999,12 @@ export class AppShell {
 
           <section class="viewport-panel" data-i18n-aria-label="viewport.panelLabel">
             <div class="viewport-toolbar"><div class="view-title"><i></i><span data-i18n="viewport.perspective">透視投影</span><small data-view-fov>45°</small></div><div class="tool-cluster" data-i18n-aria-label="viewport.settingsLabel">
+              <button class="tool-button import-tool-button" data-action="import" type="button" data-i18n-aria-label="import.openLabel"><i class="import-glyph" aria-hidden="true">↓</i><span data-i18n="import.open">Import Model</span></button>
               <button class="tool-button is-active" data-action="grid" type="button" data-i18n-aria-label="viewport.gridLabel" aria-pressed="true"><i class="grid-glyph" aria-hidden="true"></i><span data-i18n="viewport.grid">グリッド</span></button>
               <button class="tool-button is-active" data-action="axes" type="button" data-i18n-aria-label="viewport.axesLabel" aria-pressed="true"><i class="axes-glyph" aria-hidden="true"></i><span data-i18n="viewport.axes">軸</span></button>
               <button class="tool-button" data-action="reset" type="button" data-i18n-aria-label="viewport.resetLabel"><i class="reset-glyph" aria-hidden="true">↺</i><span data-i18n="viewport.reset">視点リセット</span></button>
             </div></div>
-            <div class="viewport" data-viewport><div class="loading-state" data-loading><span class="loading-cube" aria-hidden="true"></span><span data-i18n="viewport.loading">WebGLを初期化中</span></div><span class="world-label" data-i18n="viewport.world">ワールド / Y軸上向き</span><div class="interaction-hint"><span data-i18n="viewport.rotateHint">左ドラッグ・回転</span><span data-i18n="viewport.panHint">右ドラッグ・移動</span><span data-i18n="viewport.zoomHint">ホイール・ズーム</span></div></div>
+            <div class="viewport" data-viewport><div class="loading-state" data-loading><span class="loading-cube" aria-hidden="true"></span><span data-i18n="viewport.loading">WebGLを初期化中</span></div><div class="drop-overlay" data-drop-overlay aria-hidden="true"><span class="drop-overlay-glyph">↓</span><strong data-i18n="import.dropTitle">3D / CADモデルをドロップ</strong><small data-i18n="import.dropBody">ファイルはブラウザ内だけで処理されます。</small></div><div class="import-toast" data-import-status role="status" aria-live="polite" hidden></div><span class="world-label" data-i18n="viewport.world">ワールド / Y軸上向き</span><div class="interaction-hint"><span data-i18n="viewport.rotateHint">左ドラッグ・回転</span><span data-i18n="viewport.panHint">右ドラッグ・移動</span><span data-i18n="viewport.zoomHint">ホイール・ズーム</span></div></div>
             <div class="viewport-statusbar"><span class="ready-status"><i></i><span data-status>初期化中</span></span><span class="status-divider"></span><span>WEBGL · ACES</span><span class="status-spacer"></span><span>DPR ≤ 2</span></div>
           </section>
 
@@ -709,6 +1013,30 @@ export class AppShell {
             <div class="inspector-scroll" data-inspector-body></div>
           </aside>
         </main>
+
+        <input class="visually-hidden" data-import-file-input type="file" accept="${IMPORT_FILE_ACCEPT}" multiple tabindex="-1">
+        <dialog class="import-dialog" data-import-dialog aria-labelledby="import-dialog-title">
+          <form method="dialog" class="import-dialog-card" data-import-options-form>
+            <div class="import-dialog-header"><div><span class="eyebrow" data-i18n="import.eyebrow">3D / CAD FILES</span><h2 id="import-dialog-title" data-i18n="import.title">Import model</h2></div><button class="dialog-close" type="submit" value="cancel" data-i18n-aria-label="import.cancelLabel">×</button></div>
+            <p class="import-dialog-intro" data-i18n="import.description">Choose a model and normalization options. Processing stays in your browser.</p>
+            <section class="import-supported"><h3 data-i18n="import.supportedFormats">Supported formats</h3><ul data-import-formats></ul></section>
+            <div class="import-option-grid">
+              <label><span data-i18n="import.unit">Unit</span><select data-import-unit name="import-unit"><option value="auto" data-i18n="import.unitAuto">Auto</option><option value="millimeter">mm</option><option value="centimeter">cm</option><option value="meter">m</option><option value="inch">in</option><option value="foot">ft</option></select></label>
+              <label><span data-i18n="import.coordinate">Coordinate system</span><select data-import-coordinate name="import-coordinate"><option value="auto" data-i18n="import.coordinateAuto">Auto</option><option value="y-up">Y-Up</option><option value="z-up">Z-Up</option></select></label>
+            </div>
+            <div class="import-checks">
+              <label><input type="checkbox" data-import-center checked><span data-i18n="import.center">Center model</span></label>
+              <label><input type="checkbox" data-import-ground checked><span data-i18n="import.ground">Place on ground</span></label>
+            </div>
+            <fieldset class="import-quality"><legend data-i18n="import.quality">Triangulation quality</legend>
+              <label><input type="radio" name="import-quality" value="low"><span data-i18n="import.qualityLow">Low</span></label>
+              <label><input type="radio" name="import-quality" value="medium" checked><span data-i18n="import.qualityMedium">Medium</span></label>
+              <label><input type="radio" name="import-quality" value="high"><span data-i18n="import.qualityHigh">High</span></label>
+            </fieldset>
+            <div class="import-dialog-note"><strong data-i18n="import.sidecarsTitle">Sidecar files</strong><span data-i18n="import.sidecarsBody">For glTF, select related .bin and image files together.</span></div>
+            <div class="import-dialog-actions"><button class="secondary-action" type="submit" value="cancel" data-i18n="import.cancel">Cancel</button><button class="primary-action" type="button" data-action="choose-import-files"><span data-i18n="import.chooseFiles">Choose files</span></button></div>
+          </form>
+        </dialog>
 
         <dialog class="manual-dialog" data-manual-dialog aria-labelledby="manual-title">
           <div class="manual-header"><div><span class="eyebrow">RENDER VIEWER 3D</span><h2 id="manual-title" data-i18n="manual.title">簡易マニュアル</h2></div><form method="dialog"><button class="dialog-close" type="submit" value="close" data-i18n-aria-label="manual.closeLabel">×</button></form></div>
@@ -722,6 +1050,7 @@ export class AppShell {
             <section><h3><span>06</span><b data-i18n="manual.displayTitle">表示設定</b></h3><ul><li data-i18n="manual.grid">グリッドを切り替えます。</li><li data-i18n="manual.axes">XYZ軸を切り替えます。</li><li data-i18n="manual.theme">ライト・ダークテーマを切り替えます。</li></ul></section>
             <section><h3><span>07</span><b data-i18n="manual.languageTitle">言語と閉じ方</b></h3><ul><li data-i18n="manual.language">English / 日本語で言語を切り替えます。</li><li data-i18n="manual.escape">Esc、閉じる、またはダイアログ外で閉じます。</li></ul></section>
           </div>
+          <a class="manual-license-link" href="${import.meta.env.BASE_URL}THIRD_PARTY_LICENSES.txt" target="_blank" rel="noopener noreferrer" data-i18n="manual.thirdPartyLicenses">第三者ライセンス・著作権表示</a>
           <form method="dialog" class="manual-footer"><button type="submit" value="close" data-i18n="manual.close">閉じる</button></form>
         </dialog>
       </div>

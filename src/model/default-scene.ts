@@ -40,6 +40,7 @@ const DEFAULT_SCENE: SceneModel = {
     near: 0.1,
     far: 200,
   },
+  imports: [],
   materials: [boxMaterial, sphereMaterial, groundMaterial],
   objects: [
     {

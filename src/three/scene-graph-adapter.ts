@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import type { SceneSnapshot } from "../model/scene-model";
+import { ImportedAssetStore } from "./imported-asset-store";
+import { ImportedSceneAdapter } from "./imported-scene-adapter";
 import { createGeometry, geometrySignature } from "./geometry-factory";
 import type { MaterialProjectionDiagnostic } from "./material/material-projector";
 import { MaterialRuntimeCache } from "./material/material-runtime-cache";
@@ -27,28 +29,43 @@ export class SceneGraphAdapter {
   readonly #objects = new Map<string, MeshEntry>();
   readonly #lights = new Map<string, LightEntry>();
   readonly #materials = new MaterialRuntimeCache();
+  readonly #imported: ImportedSceneAdapter;
 
-  constructor(scene: THREE.Scene) {
+  constructor(
+    scene: THREE.Scene,
+    importedAssets = new ImportedAssetStore(),
+  ) {
     this.#scene = scene;
+    this.#imported = new ImportedSceneAdapter(scene, importedAssets);
   }
 
   applyModel(
     objectModels: SceneSnapshot["objects"],
     lightModels: SceneSnapshot["lights"],
     materialModels: SceneSnapshot["materials"],
+    importModels: SceneSnapshot["imports"] = [],
   ): void {
     const materialIds = this.#collectUniqueIds(materialModels, "material");
     const objectIds = this.#collectUniqueIds(objectModels, "object");
+    const importedIds = this.#collectUniqueIds(importModels, "imported scene");
     const lightIds = this.#collectUniqueIds(lightModels, "light");
     this.#validateMaterialReferences(objectModels, materialIds);
+    for (const importedId of importedIds) {
+      if (objectIds.has(importedId)) {
+        throw new Error(`Duplicate scene object id: ${importedId}`);
+      }
+    }
 
     this.#materials.reconcile(materialModels);
     this.#reconcileObjects(objectModels, objectIds);
     this.#reconcileLights(lightModels, lightIds);
+    this.#imported.applyModel(importModels, materialModels);
   }
 
   getObjectById(objectId: string): THREE.Object3D | undefined {
-    return this.#objects.get(objectId)?.mesh;
+    return (
+      this.#objects.get(objectId)?.mesh ?? this.#imported.getObjectById(objectId)
+    );
   }
 
   getPickableObjects(): THREE.Object3D[] {
@@ -56,6 +73,7 @@ export class SceneGraphAdapter {
     for (const { mesh } of this.#objects.values()) {
       if (mesh.visible) objects.push(mesh);
     }
+    objects.push(...this.#imported.getPickableObjects());
     return objects;
   }
 
@@ -70,6 +88,7 @@ export class SceneGraphAdapter {
     for (const entry of this.#lights.values()) this.#removeLight(entry);
     this.#objects.clear();
     this.#lights.clear();
+    this.#imported.dispose();
     this.#materials.dispose();
   }
 

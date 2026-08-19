@@ -1,8 +1,14 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  optimizeDeps: {
+    exclude: ["occt-wasm"],
+  },
   base: "/Render-Viewer-3D/",
   build: {
-    target: "es2022",
+    target: "esnext",
+  },
+  worker: {
+    format: "es",
   },
 });

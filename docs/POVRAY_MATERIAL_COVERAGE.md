@@ -63,17 +63,24 @@ as an approximation.
 ## Intentional rendering limits
 
 Procedural pattern graphs, recursive layered textures, photon caustics,
-radiosity-dependent subsurface transport, full volume media, image projection,
+radiosity-dependent subsurface transport, full volume media, POV-Ray image projection,
 and exact ray-traced reflection/refraction are not rendered by the current
 real-time WebGL viewport. The SceneModel has slots for the listed concept
 families, and the capability catalog classifies their current viewport status
 as **Stored only**.
 
-Local bitmap and HDRI loading, texture sampler management, and browser-file
-persistence are not implemented in this phase. `PovImageMapModel` can retain a
-source string and mapping options as model-only metadata, but the application
-does not load that source. The SceneModel does not persist browser `File` or
-`Blob` objects, object URLs, or Three.js GPU resources.
+The Basic preview editor can load a local PNG, JPEG, or WebP as a WebGL
+base-color map and edit repeat, offset, rotation, and edge wrapping. This is a
+preview-only `MaterialColorMapModel`; it is intentionally separate from
+POV-Ray `PovImageMapModel`, whose source string and mapping options remain
+stored-only metadata and are never fetched by the application.
+
+Local image bytes are session-only. SceneModel stores an asset identifier,
+source metadata, dimensions, and mapping values, but never a browser `File` or
+`Blob`, object URL, decoded bitmap, or Three.js GPU resource. The runtime image
+store validates and owns those objects and releases them explicitly. HDRI,
+normal and bump maps, procedural image projection, persistent browser-file
+storage, and imported meshes without usable UV coordinates remain unsupported.
 
 ## Reference baseline
 

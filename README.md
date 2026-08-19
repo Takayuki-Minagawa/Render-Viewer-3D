@@ -49,6 +49,7 @@ POV-Ray本体は組み込んでおらず、POV-Ray SDLの入出力やレンダ�
 - Color、Diffuse、Specular、Roughness、Metallic、Reflection、Transmission、IOR、Opacity、Emissionの基本編集
 - 数値項目のスライダーと数値入力、代表的なIORのプリセット
 - Transparent、Double sided、Wireframeの切替
+- ローカルPNG / JPEG / WebPをベースカラーマップとして読み込み、繰り返し・オフセット・回転・端処理を編集
 - Three.js `MeshPhysicalMaterial`によるリアルタイムプレビュー
 - 外部HDRIを使用しない、ローカル生成のニュートラルな環境反射
 - Box / Sphere / Planeで材質差を確認できる初期シーン
@@ -117,7 +118,8 @@ POV-Ray概念プロファイルは自動更新されません。
 - POV-Ray SDLの読込、書出し、構文検証、任意の材質の往復変換には対応していません。
 - WebGLプレビュープロファイルとPOV-Ray概念プロファイルの相互変換・同期は行いません。
 - プロシージャルパターン、積層texture、image map、normal / bump map、media、caustics、subsurfaceなどは、概念カタログまたはSceneModel内の保持対象であり、現在のViewportでは描画しません。
-- マテリアルエディター単体でのローカル画像・HDRI読込とテクスチャのサンプラー管理には対応していません。glTFから参照される画像はglTFリソースとして読み込みます。
+- マテリアルエディターのカラーマップはPNG / JPEG / WebPのみ対応し、16 MiB・一辺4096 px・約16 MP・常駐推定256 MiBを上限とします。SVG、アニメーション画像、HDRI、normal / bump mapは未対応です。
+- ローカルカラーマップの画像実体はブラウザメモリ内だけに保持され、ページ再読み込み後は再選択が必要です。UVのない読み込みmeshは画像を適用せずベース色へフォールバックします。
 - Three.js/WebGLによる表示であり、POV-Rayとのピクセル互換性はありません。
 - シーンのファイル保存・復元には未対応のため、ページを再読み込みすると編集内容は初期状態に戻ります。
 - ライト編集、AO、PNG出力、JSON入出力、比較機能は未実装です。
@@ -139,7 +141,7 @@ POV-Ray概念プロファイルは自動更新されません。
 
 ## プライバシーと外部通信
 
-- 選択したモデル本体とローカルsidecarはブラウザのメモリ内で処理し、アプリから外部サーバーへアップロードしません。
+- 選択したモデル本体、ローカルsidecar、およびマテリアル画像はブラウザのメモリ内で処理し、アプリから外部サーバーへアップロードしません。
 - `localStorage`は表示言語とテーマの保存にだけ使用します。
 - Analytics、Cookie、外部API、外部CDNは使用していません。
 - `.gltf`内のHTTP(S)など外部resource URIは読み込みを拒否します。参照resourceはローカルファイルとして本体と同時に選択してください。
@@ -174,10 +176,11 @@ npm run preview
 
 `npm test` はScene Storeの不変性、オブジェクト編集コマンド、Geometry生成、
 マテリアルプリセットと管理コマンド、SceneModel v1からv2への移行、ライブラリ検索、
-Three.js材質への投影、共有リソースの再利用・破棄、IORのプレビュー制限、
-TransformControls操作中のモデル同期に加え、Importer選択、単位・座標・原点の正規化、
-glTF sidecar解決、OBJ / STL / STEP変換、import record、runtime assetの再利用・破棄、
-マテリアル切替、Camera Auto Fitを検証します。
+Three.js材質への投影、共有リソースの再利用・破棄、IORのプレビュー制限、ローカル画像の
+header / 容量 / 寸法検証、非同期競合、テクスチャmappingと解放、TransformControls操作中の
+モデル同期に加え、Importer選択、単位・座標・原点の正規化、glTF sidecar解決、
+OBJ / STL / STEP変換、import record、runtime assetの再利用・破棄、マテリアル切替、
+Camera Auto Fitを検証します。
 `npm run build` はprebuildでTypeScriptの型検査を実行後、`dist/`へ静的ファイルを生成します。
 GitHub Pagesのプロジェクトパスに合わせ、Viteの`base`は`/Render-Viewer-3D/`です。
 
@@ -207,6 +210,11 @@ Three.jsリソースをreconcileします。現在はSceneModelをファイル�
 import recordはJSON化できますが、実体のObject3D、Geometry、Material、Textureは
 `ImportedAssetStore`がruntime assetとして別に所有します。このためimport recordだけを保存しても
 外部モデルは復元できません。
+
+ローカルカラーマップも同じ境界を守り、SceneModelにはJSON化可能なasset ID、元ファイル情報、
+寸法、mapping設定だけを保存します。デコード済み画像とThree.jsのSource / Textureはruntimeの
+`MaterialImageAssetStore`と`MaterialRuntimeCache`が所有し、差替え、削除、アプリ終了時に
+明示的に解放します。SceneModelのdescriptorだけでは画像実体を復元できません。
 
 ## POV-Rayとの関係
 

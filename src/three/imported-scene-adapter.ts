@@ -23,12 +23,19 @@ interface ImportedSceneEntry {
 export class ImportedSceneAdapter {
   readonly #scene: THREE.Scene;
   readonly #assets: ImportedAssetStore;
-  readonly #materials = new MaterialRuntimeCache();
+  readonly #materials: MaterialRuntimeCache;
+  readonly #ownsMaterials: boolean;
   readonly #entries = new Map<string, ImportedSceneEntry>();
 
-  constructor(scene: THREE.Scene, assets: ImportedAssetStore) {
+  constructor(
+    scene: THREE.Scene,
+    assets: ImportedAssetStore,
+    materials?: MaterialRuntimeCache,
+  ) {
     this.#scene = scene;
     this.#assets = assets;
+    this.#materials = materials ?? new MaterialRuntimeCache();
+    this.#ownsMaterials = materials === undefined;
   }
 
   applyModel(
@@ -36,7 +43,7 @@ export class ImportedSceneAdapter {
     materialDefinitions: readonly DeepReadonly<MaterialDefinitionModel>[],
   ): void {
     const resolvedAssets = this.#validateAndResolve(models, materialDefinitions);
-    this.#materials.reconcile(materialDefinitions);
+    if (this.#ownsMaterials) this.#materials.reconcile(materialDefinitions);
 
     const activeAssetIds = new Set(models.map(({ assetId }) => assetId));
     const previousAssetIds = new Set(
@@ -52,7 +59,14 @@ export class ImportedSceneAdapter {
       }
       if (asset.root.parent !== this.#scene) this.#scene.add(asset.root);
       const rootSignature = importedRootSignature(model);
-      const materialSignature = importedMaterialSignature(model);
+      const materialSignature = importedMaterialSignature(
+        model,
+        materialDefinitions,
+        Boolean(
+          model.customMaterialId &&
+            this.#materials.getMaterial(model.customMaterialId)?.map,
+        ),
+      );
       this.#applyImportedScene(
         asset,
         model,
@@ -104,7 +118,7 @@ export class ImportedSceneAdapter {
     );
     for (const assetId of activeAssetIds) this.#assets.delete(assetId);
     this.#entries.clear();
-    this.#materials.dispose();
+    if (this.#ownsMaterials) this.#materials.dispose();
   }
 
   #validateAndResolve(
@@ -198,8 +212,13 @@ export class ImportedSceneAdapter {
           );
         }
         const material = this.#materials.requireMaterial(materialId);
+        const fallback = material.map
+          ? this.#materials.requireUntexturedMaterial(materialId)
+          : material;
         asset.forEachMesh((mesh) => {
-          mesh.material = material;
+          mesh.material = hasUsableTextureCoordinates(mesh.geometry)
+            ? material
+            : fallback;
         });
       }
     }
@@ -223,11 +242,33 @@ function importedRootSignature(model: ImportedSceneSnapshot): string {
   ]);
 }
 
-function importedMaterialSignature(model: ImportedSceneSnapshot): string {
+function importedMaterialSignature(
+  model: ImportedSceneSnapshot,
+  materialDefinitions: readonly DeepReadonly<MaterialDefinitionModel>[],
+  runtimeHasColorMap: boolean,
+): string {
+  const customMaterial = model.customMaterialId
+    ? materialDefinitions.find(({ id }) => id === model.customMaterialId)
+    : undefined;
   return JSON.stringify([
     model.materialMode,
     model.customMaterialId,
+    customMaterial?.colorMap?.assetId ?? null,
+    runtimeHasColorMap,
   ]);
+}
+
+function hasUsableTextureCoordinates(
+  geometry: THREE.BufferGeometry,
+): boolean {
+  const positions = geometry.getAttribute("position");
+  const uvs = geometry.getAttribute("uv");
+  return Boolean(
+    positions &&
+      uvs &&
+      uvs.itemSize >= 2 &&
+      uvs.count >= positions.count,
+  );
 }
 
 function isEffectivelyVisible(mesh: ImportedMesh, root: THREE.Object3D): boolean {

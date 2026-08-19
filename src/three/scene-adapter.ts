@@ -10,6 +10,7 @@ import type {
 } from "../model/scene-model";
 import { calculateCameraFit } from "./camera-fit";
 import { ImportedAssetStore } from "./imported-asset-store";
+import type { MaterialImageAssetStore } from "./material/image-asset-store";
 import { SceneGraphAdapter } from "./scene-graph-adapter";
 import { SceneInteractionAdapter } from "./scene-interaction-adapter";
 import {
@@ -26,6 +27,7 @@ interface CameraPose {
 
 interface SceneAdapterOptions {
   importedAssets?: ImportedAssetStore;
+  materialImages?: MaterialImageAssetStore;
   onCameraInteractionEnd: (pose: CameraPose) => void;
   onObjectSelected: (objectId: string | null) => void;
   onObjectTransformCommitted: (
@@ -60,10 +62,17 @@ export class SceneAdapter {
     this.#onCameraInteractionEnd = options.onCameraInteractionEnd;
     this.#camera = this.#createCamera(model.camera);
     this.#renderer = this.#createRenderer();
+    options.materialImages?.setMaxTextureSize(
+      this.#renderer.capabilities.maxTextureSize,
+    );
     this.#environment = createNeutralEnvironment(this.#renderer);
     this.#scene.environment = this.#environment.texture;
     this.#controls = this.#createControls(model.camera);
-    this.#sceneGraph = new SceneGraphAdapter(this.#scene, options.importedAssets);
+    this.#sceneGraph = new SceneGraphAdapter(
+      this.#scene,
+      options.importedAssets,
+      options.materialImages,
+    );
     this.#interaction = new SceneInteractionAdapter(
       this.#scene,
       this.#camera,

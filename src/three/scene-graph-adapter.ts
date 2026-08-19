@@ -4,6 +4,7 @@ import { ImportedAssetStore } from "./imported-asset-store";
 import { ImportedSceneAdapter } from "./imported-scene-adapter";
 import { createGeometry, geometrySignature } from "./geometry-factory";
 import type { MaterialProjectionDiagnostic } from "./material/material-projector";
+import type { MaterialImageAssetStore } from "./material/image-asset-store";
 import { MaterialRuntimeCache } from "./material/material-runtime-cache";
 
 type ObjectModel = SceneSnapshot["objects"][number];
@@ -28,15 +29,21 @@ export class SceneGraphAdapter {
   readonly #scene: THREE.Scene;
   readonly #objects = new Map<string, MeshEntry>();
   readonly #lights = new Map<string, LightEntry>();
-  readonly #materials = new MaterialRuntimeCache();
+  readonly #materials: MaterialRuntimeCache;
   readonly #imported: ImportedSceneAdapter;
 
   constructor(
     scene: THREE.Scene,
     importedAssets = new ImportedAssetStore(),
+    materialImages?: MaterialImageAssetStore,
   ) {
     this.#scene = scene;
-    this.#imported = new ImportedSceneAdapter(scene, importedAssets);
+    this.#materials = new MaterialRuntimeCache(materialImages);
+    this.#imported = new ImportedSceneAdapter(
+      scene,
+      importedAssets,
+      this.#materials,
+    );
   }
 
   applyModel(

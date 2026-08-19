@@ -214,6 +214,7 @@ export function createMaterialDefinition(
     tags: [...preset.tags],
     presetId,
     preview: materialPreview,
+    colorMap: null,
     pov: createPovMaterialFromPreview(materialPreview),
   };
 }
@@ -231,6 +232,7 @@ export function createMaterialDefinitionFromPreview(
     tags: [],
     presetId: null,
     preview: clonedPreview,
+    colorMap: null,
     pov: createPovMaterialFromPreview(clonedPreview),
   };
 }

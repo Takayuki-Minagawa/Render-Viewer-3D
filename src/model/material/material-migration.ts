@@ -35,6 +35,7 @@ export function migrateSceneModel(
   if (schemaVersion === 2) {
     const current = structuredClone(source as SceneModel);
     current.imports ??= [];
+    for (const material of current.materials) material.colorMap ??= null;
     return current;
   }
   if (schemaVersion !== 1) {

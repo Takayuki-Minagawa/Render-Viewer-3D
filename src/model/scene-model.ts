@@ -16,9 +16,58 @@ export interface MaterialModel {
   roughness: number;
 }
 
+export interface BoxGeometryModel {
+  type: "box";
+  width: number;
+  height: number;
+  depth: number;
+}
+
+export interface SphereGeometryModel {
+  type: "sphere";
+  radius: number;
+  widthSegments: number;
+  heightSegments: number;
+}
+
+export interface CylinderGeometryModel {
+  type: "cylinder";
+  radiusTop: number;
+  radiusBottom: number;
+  height: number;
+  radialSegments: number;
+}
+
+export interface ConeGeometryModel {
+  type: "cone";
+  radius: number;
+  height: number;
+  radialSegments: number;
+}
+
+export interface PlaneGeometryModel {
+  type: "plane";
+  width: number;
+  height: number;
+}
+
+export interface TorusGeometryModel {
+  type: "torus";
+  radius: number;
+  tubeRadius: number;
+  radialSegments: number;
+  tubularSegments: number;
+}
+
 export type GeometryModel =
-  | { type: "box"; width: number; height: number; depth: number }
-  | { type: "plane"; width: number; height: number };
+  | BoxGeometryModel
+  | SphereGeometryModel
+  | CylinderGeometryModel
+  | ConeGeometryModel
+  | PlaneGeometryModel
+  | TorusGeometryModel;
+
+export type GeometryType = GeometryModel["type"];
 
 export interface SceneObjectModel {
   id: string;

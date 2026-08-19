@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { SceneSnapshot } from "../model/scene-model";
+import { createGeometry, geometrySignature } from "./geometry-factory";
 
 type ObjectModel = SceneSnapshot["objects"][number];
 type LightModel = SceneSnapshot["lights"][number];
@@ -7,7 +8,7 @@ type DirectionalLightModel = Extract<LightModel, { type: "directional" }>;
 
 interface MeshEntry {
   mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
-  geometryKey: string;
+  geometrySignature: string;
 }
 
 type LightEntry =
@@ -37,6 +38,18 @@ export class SceneGraphAdapter {
     this.#reconcileLights(lightModels, lightIds);
   }
 
+  getObjectById(objectId: string): THREE.Object3D | undefined {
+    return this.#objects.get(objectId)?.mesh;
+  }
+
+  getPickableObjects(): THREE.Object3D[] {
+    const objects: THREE.Object3D[] = [];
+    for (const { mesh } of this.#objects.values()) {
+      if (mesh.visible) objects.push(mesh);
+    }
+    return objects;
+  }
+
   dispose(): void {
     for (const entry of this.#objects.values()) this.#removeObject(entry);
     for (const entry of this.#lights.values()) this.#removeLight(entry);
@@ -49,17 +62,18 @@ export class SceneGraphAdapter {
     activeIds: ReadonlySet<string>,
   ): void {
     for (const model of models) {
-      const geometryKey = this.#geometryKey(model.geometry);
+      const nextSignature = geometrySignature(model.geometry);
       let entry = this.#objects.get(model.id);
 
       if (!entry) {
-        entry = this.#createObject(model, geometryKey);
+        entry = this.#createObject(model, nextSignature);
         this.#objects.set(model.id, entry);
         this.#scene.add(entry.mesh);
-      } else if (entry.geometryKey !== geometryKey) {
+      } else if (entry.geometrySignature !== nextSignature) {
+        const nextGeometry = createGeometry(model.geometry);
         const previousGeometry = entry.mesh.geometry;
-        entry.mesh.geometry = this.#createGeometry(model.geometry);
-        entry.geometryKey = geometryKey;
+        entry.mesh.geometry = nextGeometry;
+        entry.geometrySignature = nextSignature;
         previousGeometry.dispose();
       }
 
@@ -101,32 +115,14 @@ export class SceneGraphAdapter {
     }
   }
 
-  #createObject(model: ObjectModel, geometryKey: string): MeshEntry {
+  #createObject(model: ObjectModel, signature: string): MeshEntry {
     return {
       mesh: new THREE.Mesh(
-        this.#createGeometry(model.geometry),
+        createGeometry(model.geometry),
         new THREE.MeshStandardMaterial(),
       ),
-      geometryKey,
+      geometrySignature: signature,
     };
-  }
-
-  #createGeometry(model: ObjectModel["geometry"]): THREE.BufferGeometry {
-    switch (model.type) {
-      case "box":
-        return new THREE.BoxGeometry(model.width, model.height, model.depth);
-      case "plane":
-        return new THREE.PlaneGeometry(model.width, model.height);
-    }
-  }
-
-  #geometryKey(model: ObjectModel["geometry"]): string {
-    switch (model.type) {
-      case "box":
-        return `box:${model.width}:${model.height}:${model.depth}`;
-      case "plane":
-        return `plane:${model.width}:${model.height}`;
-    }
   }
 
   #applyObject(mesh: MeshEntry["mesh"], model: ObjectModel): void {

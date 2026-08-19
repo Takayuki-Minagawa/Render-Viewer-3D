@@ -37,32 +37,35 @@ Viteが表示する `/Render-Viewer-3D/` のURLをブラウザで開いてくだ
 ## ビルドとプレビュー
 
 ```bash
+npm test
 npm run build
 npm run preview
 ```
 
+`npm test` はScene Storeの不変性と、SceneModelからThree.js Sceneへの追加・削除・差し替えを検証します。
 `npm run build` はprebuildでTypeScriptの型検査を実行後、`dist/`へ静的ファイルを生成します。
 GitHub Pagesのプロジェクトパスに合わせ、Viteの`base`は`/Render-Viewer-3D/`です。
 
 ## デプロイ
 
-`main`ブランチへのpushで `.github/workflows/deploy.yml` が実行されます。
-ワークフローは依存関係のインストール、型検査・ビルド、Pages artifactのアップロード、
-`github-pages` environmentへのデプロイを行います。
+Pull Requestではテストと型検査・ビルドを実行します。`main`ブランチへのpushでは、
+検証に加えてPages artifactのアップロードと`github-pages` environmentへのデプロイを行います。
 
 ## 構成
 
 ```text
 src/
 ├─ app/       # アプリケーションの組み立てとScene Store
-├─ model/     # 永続化可能なSceneModelと初期シーン
-├─ three/     # SceneModelをThree.jsへ反映するAdapter
+├─ model/     # 永続化可能なSceneModel、不変Snapshot、初期シーン
+├─ three/     # ViewportとSceneGraphのAdapter
 ├─ ui/        # 3ペインUIシェル
 ├─ main.ts
 └─ styles.css
 ```
 
 Three.jsのSceneは永続データの正本にせず、JSON化可能なSceneModelを正本として扱います。
+Storeは深くfreezeしたSnapshotを公開し、SceneGraph AdapterがモデルのIDと型を基準に
+Three.jsリソースをreconcileします。
 
 ## ライセンス
 

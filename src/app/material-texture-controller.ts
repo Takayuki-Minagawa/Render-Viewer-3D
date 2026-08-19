@@ -27,14 +27,21 @@ export class MaterialTextureControllerError extends Error {
 export class MaterialTextureController {
   readonly #sceneStore: SceneStore;
   readonly #assets: MaterialImageAssetStore;
+  readonly #onAssetsReleased: (() => void) | undefined;
   readonly #generations = new Map<string, number>();
   #disposed = false;
   #activeImports = 0;
   #releaseRequested = false;
+  #assetsReleased = false;
 
-  constructor(sceneStore: SceneStore, assets: MaterialImageAssetStore) {
+  constructor(
+    sceneStore: SceneStore,
+    assets: MaterialImageAssetStore,
+    onAssetsReleased?: () => void,
+  ) {
     this.#sceneStore = sceneStore;
     this.#assets = assets;
+    this.#onAssetsReleased = onAssetsReleased;
   }
 
   async attach(
@@ -54,7 +61,7 @@ export class MaterialTextureController {
         this.#generations.get(materialId) !== generation ||
         !this.#hasMaterial(materialId)
       ) {
-        this.#assets.delete(colorMap.assetId);
+        this.#deleteAsset(colorMap.assetId);
         if (this.#disposed) this.#assertActive();
         if (!this.#hasMaterial(materialId)) {
           throw new MaterialTextureControllerError(
@@ -85,14 +92,18 @@ export class MaterialTextureController {
       return publishedColorMap;
     } catch (error) {
       if (colorMap && !this.#isAssetReferenced(colorMap.assetId)) {
-        this.#assets.delete(colorMap.assetId);
+        this.#deleteAsset(colorMap.assetId);
       }
       throw error;
     } finally {
       this.#activeImports -= 1;
-      if (this.#activeImports === 0 && this.#releaseRequested) {
-        this.#releaseRequested = false;
-        this.releaseUnused();
+      if (this.#activeImports === 0) {
+        if (this.#releaseRequested) {
+          this.#releaseRequested = false;
+          this.releaseUnused();
+        } else {
+          this.#notifyAssetsReleased();
+        }
       }
     }
   }
@@ -140,13 +151,32 @@ export class MaterialTextureController {
         ),
     );
     for (const assetId of this.#assets.ids()) {
-      if (!activeIds.has(assetId)) this.#assets.delete(assetId);
+      if (!activeIds.has(assetId)) this.#deleteAsset(assetId);
     }
+    this.#notifyAssetsReleased();
   }
 
   dispose(): void {
     this.#disposed = true;
     this.#generations.clear();
+  }
+
+  #deleteAsset(assetId: string): boolean {
+    const released = this.#assets.delete(assetId);
+    if (released) this.#assetsReleased = true;
+    return released;
+  }
+
+  #notifyAssetsReleased(): void {
+    if (!this.#assetsReleased) return;
+    this.#assetsReleased = false;
+    if (this.#disposed) return;
+    try {
+      this.#onAssetsReleased?.();
+    } catch {
+      // Asset cleanup and SceneModel publication are already committed. A
+      // best-effort rendering retry must not turn them into a failed edit.
+    }
   }
 
   #nextGeneration(materialId: string): number {

@@ -194,6 +194,11 @@ export class MaterialRuntimeCache {
       return;
     }
 
+    const hadTexture = Boolean(entry.texture);
+    const hadTopLeftTexture = Boolean(entry.topLeftTexture);
+    this.#detachTexture(entry);
+    this.#detachTopLeftTexture(entry);
+
     const texture = this.#createTexture(colorMap, "bottom-left");
     if (!texture) {
       this.#markTextureUnavailable(entry, signature);
@@ -217,10 +222,6 @@ export class MaterialRuntimeCache {
       return;
     }
 
-    const hadTexture = Boolean(entry.texture);
-    const hadTopLeftTexture = Boolean(entry.topLeftTexture);
-    this.#detachTexture(entry);
-    this.#detachTopLeftTexture(entry);
     entry.texture = texture;
     entry.textureAssetId = colorMap.assetId;
     entry.textureSignature = signature;

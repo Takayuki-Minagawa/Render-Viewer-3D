@@ -145,7 +145,14 @@ describe("MaterialTextureController", () => {
     for (const resolutionOrder of ["first-then-second", "second-then-first"]) {
       const sceneStore = new SceneStore(createDefaultSceneModel());
       const assets = createAssetStoreDouble();
-      const controller = new MaterialTextureController(sceneStore, assets);
+      let releaseCallbacks = 0;
+      const controller = new MaterialTextureController(
+        sceneStore,
+        assets,
+        () => {
+          releaseCallbacks += 1;
+        },
+      );
       const materialId = sceneStore.getSnapshot().materials[0].id;
       const first = controller.attach(materialId, createFile("A.png"));
       const second = controller.attach(materialId, createFile("B.png"));
@@ -173,6 +180,7 @@ describe("MaterialTextureController", () => {
       assert.deepEqual(resultB, descriptorB);
       assert.equal(findMaterial(sceneStore, materialId).colorMap.assetId, descriptorB.assetId);
       assert.deepEqual(assets.ids(), [descriptorB.assetId]);
+      assert.equal(releaseCallbacks, 1);
     }
   });
 
@@ -210,17 +218,26 @@ describe("MaterialTextureController", () => {
     const sceneStore = new SceneStore(scene);
     const assets = createAssetStoreDouble();
     const oldResource = assets.seed(oldDescriptor);
-    const controller = new MaterialTextureController(sceneStore, assets);
+    let releaseCallbacks = 0;
+    const controller = new MaterialTextureController(
+      sceneStore,
+      assets,
+      () => {
+        releaseCallbacks += 1;
+      },
+    );
 
     const attaching = controller.attach(materialId, createFile("pending.png"));
     assert.equal(controller.remove(materialId), true);
     assert.equal(findMaterial(sceneStore, materialId).colorMap, null);
+    assert.equal(releaseCallbacks, 0);
 
     const pendingResource = assets.resolve(
       0,
       createDescriptor("remove-pending"),
     );
     assert.equal(await attaching, undefined);
+    assert.equal(releaseCallbacks, 1);
     assert.equal(oldResource.disposeCalls, 1);
     assert.equal(pendingResource.disposeCalls, 1);
     assert.equal(findMaterial(sceneStore, materialId).colorMap, null);
@@ -271,6 +288,33 @@ describe("MaterialTextureController", () => {
       (error) =>
         error instanceof MaterialTextureControllerError && error.code === "disposed",
     );
+  });
+
+  it("isolates post-release callback failures from committed cleanup", () => {
+    const sceneStore = new SceneStore(createDefaultSceneModel());
+    const assets = createAssetStoreDouble();
+    const orphan = assets.seed(createDescriptor("callback-orphan"));
+    let callbackCalls = 0;
+    const controller = new MaterialTextureController(
+      sceneStore,
+      assets,
+      () => {
+        callbackCalls += 1;
+        throw new Error("render retry failed");
+      },
+    );
+
+    assert.doesNotThrow(() => controller.releaseUnused());
+    assert.equal(orphan.disposeCalls, 1);
+    assert.equal(callbackCalls, 1);
+    controller.releaseUnused();
+    assert.equal(callbackCalls, 1);
+
+    controller.dispose();
+    const afterDispose = assets.seed(createDescriptor("disposed-orphan"));
+    controller.releaseUnused();
+    assert.equal(afterDispose.disposeCalls, 1);
+    assert.equal(callbackCalls, 1);
   });
 
   it("keeps shared assets until the final reference is removed and sweeps orphans", () => {

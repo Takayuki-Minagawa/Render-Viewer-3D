@@ -51,7 +51,6 @@ export function createApplication(root: HTMLElement): Application {
   });
   const importedAssets = new ImportedAssetStore();
   const materialImages = new MaterialImageAssetStore();
-  const materialTextures = new MaterialTextureController(store, materialImages);
   const importManager = new ImportManager();
   const importAbortController = new AbortController();
   const shell = new AppShell(root);
@@ -79,6 +78,11 @@ export function createApplication(root: HTMLElement): Application {
         });
       },
     });
+    const materialTextures = new MaterialTextureController(
+      store,
+      materialImages,
+      () => adapter.applyModel(store.getSnapshot()),
+    );
     const importController = new ImportController(
       importManager,
       importedAssets,

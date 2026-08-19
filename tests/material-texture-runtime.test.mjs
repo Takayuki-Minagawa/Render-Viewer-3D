@@ -10,6 +10,9 @@ let MaterialRuntimeCache;
 let ImportedAssetStore;
 let ImportedSceneAdapter;
 let createImportedSceneModel;
+let MaterialTextureController;
+let SceneStore;
+let createDefaultSceneModel;
 
 before(async () => {
   server = await createServer({
@@ -32,6 +35,13 @@ before(async () => {
   ));
   ({ createImportedSceneModel } = await server.ssrLoadModule(
     "/src/model/imported-scene-model.ts",
+  ));
+  ({ MaterialTextureController } = await server.ssrLoadModule(
+    "/src/app/material-texture-controller.ts",
+  ));
+  ({ SceneStore } = await server.ssrLoadModule("/src/app/scene-store.ts"));
+  ({ createDefaultSceneModel } = await server.ssrLoadModule(
+    "/src/model/default-scene.ts",
   ));
 });
 
@@ -423,6 +433,174 @@ describe("MaterialRuntimeCache local color maps", () => {
     loaded.store.dispose();
   });
 
+  it("releases old variants before replacing both at the resident limit", async () => {
+    const loaded = await createLoadedAssets(
+      [
+        [100, 100],
+        [100, 100],
+      ],
+      240_002,
+    );
+    const [firstDescriptor, secondDescriptor] = loaded.descriptors;
+    const definition = createTexturedDefinition(
+      "bounded-swap",
+      firstDescriptor,
+    );
+    const materials = new MaterialRuntimeCache(loaded.store);
+    materials.reconcile([definition]);
+
+    const standardMaterial = materials.requireMaterial(definition.id);
+    const topLeftMaterial = materials.requireMaterial(
+      definition.id,
+      "top-left",
+    );
+    const firstStandardTexture = standardMaterial.map;
+    const firstTopLeftTexture = topLeftMaterial.map;
+    assert.ok(firstStandardTexture instanceof THREE.Texture);
+    assert.ok(firstTopLeftTexture instanceof THREE.Texture);
+    assert.equal(loaded.store.residentBytes, 240_002);
+    const firstStandardDisposal = trackDisposeEvent(firstStandardTexture);
+    const firstTopLeftDisposal = trackDisposeEvent(firstTopLeftTexture);
+
+    const replaced = structuredClone(definition);
+    replaced.colorMap = {
+      ...structuredClone(secondDescriptor),
+      repeatX: definition.colorMap.repeatX,
+      repeatY: definition.colorMap.repeatY,
+      offsetX: definition.colorMap.offsetX,
+      offsetY: definition.colorMap.offsetY,
+      rotationDegrees: definition.colorMap.rotationDegrees,
+      wrapMode: definition.colorMap.wrapMode,
+    };
+    materials.reconcile([replaced]);
+
+    assert.equal(materials.requireMaterial(definition.id), standardMaterial);
+    assert.equal(
+      materials.requireMaterial(definition.id, "top-left"),
+      topLeftMaterial,
+    );
+    const secondStandardTexture = standardMaterial.map;
+    const secondTopLeftTexture = topLeftMaterial.map;
+    assert.ok(secondStandardTexture instanceof THREE.Texture);
+    assert.ok(secondTopLeftTexture instanceof THREE.Texture);
+    assert.notEqual(secondStandardTexture, firstStandardTexture);
+    assert.notEqual(secondTopLeftTexture, firstTopLeftTexture);
+    assert.equal(secondStandardTexture.source, secondTopLeftTexture.source);
+    assert.equal(secondStandardTexture.source.data, loaded.images[1].image);
+    assert.equal(firstStandardDisposal.count, 1);
+    assert.equal(firstTopLeftDisposal.count, 1);
+    assert.equal(loaded.store.residentBytes, 240_002);
+
+    assert.equal(loaded.store.delete(firstDescriptor.assetId), true);
+    assert.equal(loaded.images[0].closeCount, 1);
+    assert.equal(loaded.store.residentBytes, 146_668);
+    materials.dispose();
+    assert.equal(loaded.store.residentBytes, 93_334);
+    assert.equal(loaded.store.delete(secondDescriptor.assetId), true);
+    assert.equal(loaded.images[1].closeCount, 1);
+    assert.equal(loaded.store.residentBytes, 0);
+    loaded.store.dispose();
+  });
+
+  it("retries a larger replacement immediately after releasing the old asset", async () => {
+    const images = [trackedImage(50, 50), trackedImage(100, 100)];
+    let decodeIndex = 0;
+    const store = new MaterialImageAssetStore(async () => {
+      const image = images[decodeIndex];
+      decodeIndex += 1;
+      if (!image) throw new Error("Unexpected material image decode.");
+      return image.image;
+    }, 150_000);
+    const firstDescriptor = await store.importFile(
+      new File([pngBytes(50, 50)], "small.png", { type: "image/png" }),
+    );
+
+    const sceneModel = createDefaultSceneModel();
+    const definition = sceneModel.materials[0];
+    definition.colorMap = structuredClone(firstDescriptor);
+    const importedModel = createImportedModel({
+      id: "large-swap-model",
+      assetId: "large-swap-asset",
+      format: "glTF",
+    });
+    importedModel.materialMode = "custom";
+    importedModel.customMaterialId = definition.id;
+    sceneModel.imports = [importedModel];
+
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial(),
+    );
+    const importedAssets = new ImportedAssetStore();
+    importedAssets.register(
+      importedModel.assetId,
+      new THREE.Group().add(mesh),
+    );
+    const materials = new MaterialRuntimeCache(store);
+    const adapter = new ImportedSceneAdapter(
+      new THREE.Scene(),
+      importedAssets,
+      materials,
+    );
+    const sceneStore = new SceneStore(sceneModel);
+    const applySnapshot = (snapshot) => {
+      materials.reconcile(snapshot.materials);
+      adapter.applyModel(snapshot.imports, snapshot.materials);
+    };
+    applySnapshot(sceneStore.getSnapshot());
+    assert.ok(
+      materials.requireMaterial(definition.id).map instanceof THREE.Texture,
+    );
+    assert.ok(mesh.material.map instanceof THREE.Texture);
+    assert.equal(store.residentBytes, 36_668);
+
+    let sceneNotifications = 0;
+    const unsubscribe = sceneStore.subscribe((snapshot) => {
+      sceneNotifications += 1;
+      applySnapshot(snapshot);
+    });
+    sceneNotifications = 0;
+    let postReleaseRetries = 0;
+    const controller = new MaterialTextureController(
+      sceneStore,
+      store,
+      () => {
+        postReleaseRetries += 1;
+        applySnapshot(sceneStore.getSnapshot());
+      },
+    );
+    const replacement = await controller.attach(
+      definition.id,
+      new File([pngBytes(100, 100)], "large.png", { type: "image/png" }),
+    );
+
+    assert.ok(replacement);
+    assert.equal(sceneNotifications, 1);
+    assert.equal(postReleaseRetries, 1);
+    assert.equal(store.has(firstDescriptor.assetId), false);
+    assert.equal(images[0].closeCount, 1);
+    const standardTexture = materials.requireMaterial(definition.id).map;
+    const topLeftTexture = mesh.material.map;
+    assert.ok(standardTexture instanceof THREE.Texture);
+    assert.ok(topLeftTexture instanceof THREE.Texture);
+    assert.equal(standardTexture.source, topLeftTexture.source);
+    assert.equal(standardTexture.source.data, images[1].image);
+    assert.equal(
+      topLeftTexture.userData.materialTextureUvOrigin,
+      "top-left",
+    );
+    assert.equal(store.residentBytes, 146_668);
+
+    controller.dispose();
+    unsubscribe();
+    adapter.dispose();
+    materials.dispose();
+    assert.equal(store.residentBytes, 93_334);
+    assert.equal(store.delete(replacement.assetId), true);
+    assert.equal(images[1].closeCount, 1);
+    assert.equal(store.residentBytes, 0);
+    store.dispose();
+  });
 
   it("uses a stable untextured fallback only for imported meshes without usable UVs", async () => {
     const asset = await createLoadedAsset(8, 8);

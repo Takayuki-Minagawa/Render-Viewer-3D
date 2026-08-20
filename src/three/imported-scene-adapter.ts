@@ -10,6 +10,7 @@ import {
   ImportedAssetStore,
   type ImportedAssetRuntime,
   type ImportedMesh,
+  type ImportedRenderable,
 } from "./imported-asset-store";
 import {
   MaterialRuntimeCache,
@@ -126,8 +127,8 @@ export class ImportedSceneAdapter {
     const objects: THREE.Object3D[] = [];
     for (const { asset } of this.#entries.values()) {
       if (!asset.root.visible) continue;
-      asset.forEachMesh((mesh) => {
-        if (isEffectivelyVisible(mesh, asset.root)) objects.push(mesh);
+      asset.forEachRenderable((object) => {
+        if (isEffectivelyVisible(object, asset.root)) objects.push(object);
       });
     }
     return objects;
@@ -252,8 +253,8 @@ export class ImportedSceneAdapter {
 
     if (!prior) {
       root.userData.sceneModelId = model.id;
-      asset.forEachMesh((mesh) => {
-        mesh.userData.sceneModelId = model.id;
+      asset.forEachRenderable((object) => {
+        object.userData.sceneModelId = model.id;
       });
     }
 
@@ -356,8 +357,11 @@ function hasUsableTextureCoordinates(
   );
 }
 
-function isEffectivelyVisible(mesh: ImportedMesh, root: THREE.Object3D): boolean {
-  let current: THREE.Object3D | null = mesh;
+function isEffectivelyVisible(
+  object: ImportedRenderable,
+  root: THREE.Object3D,
+): boolean {
+  let current: THREE.Object3D | null = object;
   while (current) {
     if (!current.visible) return false;
     if (current === root) return true;

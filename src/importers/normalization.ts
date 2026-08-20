@@ -17,6 +17,8 @@ const METERS_PER_UNIT: Readonly<Record<ResolvedImportUnit, number>> = {
 
 export interface NormalizationContext {
   sourceUnit?: ResolvedImportUnit;
+  sourceMetersPerUnit?: number;
+  sourceUnitLabel?: string;
   sourceCoordinateSystem?: ResolvedImportCoordinateSystem;
 }
 
@@ -54,12 +56,18 @@ function prepareRenderableObjects(root: THREE.Object3D): boolean {
   let hasNonFiniteGeometry = false;
 
   root.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) {
+    if (
+      !(object instanceof THREE.Mesh) &&
+      !(object instanceof THREE.Points) &&
+      !(object instanceof THREE.Line)
+    ) {
       return;
     }
 
-    object.castShadow = true;
-    object.receiveShadow = true;
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
 
     const geometry = object.geometry;
     const position = geometry.getAttribute("position");
@@ -73,6 +81,7 @@ function prepareRenderableObjects(root: THREE.Object3D): boolean {
       return;
     }
     if (
+      object instanceof THREE.Mesh &&
       position !== undefined &&
       geometry.getAttribute("normal") === undefined
     ) {
@@ -91,12 +100,18 @@ function applyUnitScale(
   context: NormalizationContext,
   warnings: ImportWarning[],
 ): void {
-  let unit: ResolvedImportUnit;
+  let metersPerUnit: number;
   if (options.unit === "auto") {
-    if (context.sourceUnit) {
-      unit = context.sourceUnit;
+    if (
+      context.sourceMetersPerUnit !== undefined &&
+      Number.isFinite(context.sourceMetersPerUnit) &&
+      context.sourceMetersPerUnit > 0
+    ) {
+      metersPerUnit = context.sourceMetersPerUnit;
+    } else if (context.sourceUnit) {
+      metersPerUnit = METERS_PER_UNIT[context.sourceUnit];
     } else {
-      unit = "meter";
+      metersPerUnit = METERS_PER_UNIT.meter;
       addWarningOnce(warnings, {
         code: "unit-unavailable",
         message:
@@ -104,10 +119,10 @@ function applyUnitScale(
       });
     }
   } else {
-    unit = options.unit;
+    metersPerUnit = METERS_PER_UNIT[options.unit];
   }
 
-  root.scale.multiplyScalar(METERS_PER_UNIT[unit]);
+  root.scale.multiplyScalar(metersPerUnit);
 }
 
 function applyCoordinateSystem(
@@ -208,15 +223,23 @@ export function collectModelStatistics(
   const materials = new Set<THREE.Material>();
 
   root.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) {
+    if (
+      !(object instanceof THREE.Mesh) &&
+      !(object instanceof THREE.Points) &&
+      !(object instanceof THREE.Line)
+    ) {
       return;
     }
 
     objectCount += 1;
     const geometry = object.geometry;
-    const index = geometry.getIndex();
-    const position = geometry.getAttribute("position");
-    triangleCount += Math.floor((index?.count ?? position?.count ?? 0) / 3);
+    if (object instanceof THREE.Mesh) {
+      const index = geometry.getIndex();
+      const position = geometry.getAttribute("position");
+      triangleCount += Math.floor(
+        (index?.count ?? position?.count ?? 0) / 3,
+      );
+    }
 
     const objectMaterials = Array.isArray(object.material)
       ? object.material
@@ -237,11 +260,13 @@ export function createModelMetadata(
   fileName: string,
   format: string,
   root: THREE.Object3D,
+  sourceUnit?: string,
 ): ModelMetadata {
   return {
     fileName,
     format,
     ...collectModelStatistics(root),
     unit: "meter",
+    sourceUnit,
   };
 }

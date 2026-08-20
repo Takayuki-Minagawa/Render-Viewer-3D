@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { registerLocalResourceObjectUrl } from "./loader-resource-wait";
 
 function stripQueryAndFragment(value: string): string {
   return value.split(/[?#]/u, 1)[0] ?? value;
@@ -131,6 +132,7 @@ export class LocalResourceResolver {
     }
 
     const objectUrl = URL.createObjectURL(file);
+    registerLocalResourceObjectUrl(this.manager, objectUrl);
     this.objectUrls.set(file, objectUrl);
     return objectUrl;
   }

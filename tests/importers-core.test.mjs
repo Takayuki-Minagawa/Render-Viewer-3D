@@ -10,6 +10,11 @@ let LocalResourceResolver;
 let collectModelStatistics;
 let normalizeImportedRoot;
 let DEFAULT_IMPORT_OPTIONS;
+let IMPORT_FILE_ACCEPT;
+let IMPORT_FILE_INPUT_ACCEPT;
+let IMPORT_RESOURCE_EXTENSIONS;
+let getImportFileInputAccept;
+let importerRegistry;
 
 before(async () => {
   server = await createServer({
@@ -29,6 +34,14 @@ before(async () => {
   ({ DEFAULT_IMPORT_OPTIONS } = await server.ssrLoadModule(
     "/src/importers/types.ts",
   ));
+  ({
+    IMPORT_FILE_ACCEPT,
+    IMPORT_FILE_INPUT_ACCEPT,
+    IMPORT_RESOURCE_EXTENSIONS,
+    getImportFileInputAccept,
+    importerRegistry,
+  } = await server.ssrLoadModule("/src/importers/registry.ts"));
+
 });
 
 after(async () => {
@@ -59,10 +72,36 @@ describe("ImportManager and importer registry", () => {
       "glb",
       "obj",
       "stl",
+      "ply",
+      "fbx",
+      "dae",
+      "3mf",
       "step",
       "stp",
     ]);
-    assert.equal(manager.accept, ".gltf,.glb,.obj,.stl,.step,.stp");
+    assert.equal(
+      manager.accept,
+      ".gltf,.glb,.obj,.stl,.ply,.fbx,.dae,.3mf,.step,.stp",
+    );
+    assert.equal(IMPORT_FILE_ACCEPT, manager.accept);
+    assert.deepEqual(IMPORT_RESOURCE_EXTENSIONS, [
+      "bin",
+      "png",
+      "jpg",
+      "jpeg",
+      "webp",
+      "tga",
+      "bmp",
+      "gif",
+    ]);
+    assert.equal(
+      IMPORT_FILE_INPUT_ACCEPT,
+      `${manager.accept},.bin,.png,.jpg,.jpeg,.webp,.tga,.bmp,.gif`,
+    );
+    assert.equal(
+      getImportFileInputAccept([importerRegistry[0]], ["BIN", ".png", ""]),
+      ".gltf,.glb,.bin,.png",
+    );
     assert.equal(manager.findImporter(file("PART.STEP")).id, "step");
     assert.equal(manager.findImporter(file("scene.GLB")).id, "gltf");
     assert.equal(manager.canImport(file("mesh.unknown")), false);

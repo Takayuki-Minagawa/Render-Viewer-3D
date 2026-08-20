@@ -6,9 +6,11 @@ bundled locally; the application does not require an external CDN.
 | Package | Declared version range | Use | License | Project |
 | --- | --- | --- | --- | --- |
 | Three.js | `^0.185.1` | Browser runtime | MIT | <https://threejs.org/> |
+| fflate (vendored in Three.js addons) | `0.8.2` | FBX compressed-array preflight and 3MF ZIP decompression in the browser runtime | MIT | <https://github.com/101arrowz/fflate/tree/v0.8.2> |
 | occt-wasm | `4.3.1` (exact) | STEP Worker wrapper and compiled Open CASCADE WASM | Wrapper: MIT OR Apache-2.0; compiled WASM: LGPL-2.1-only WITH OCCT-exception-1.0 | <https://github.com/andymai/occt-wasm/tree/v4.3.1> |
 | Comlink | `4.4.2` (resolved transitive runtime) | Worker RPC used by occt-wasm | Apache-2.0 | <https://github.com/GoogleChromeLabs/comlink/tree/v4.4.2> |
 | @types/three | `^0.185.4` | Development type declarations | MIT | <https://github.com/DefinitelyTyped/DefinitelyTyped> |
+| linkedom | `0.18.12` (exact) | Development/test-only DOMParser for the real DAE / 3MF fixtures | ISC | <https://github.com/WebReflection/linkedom/tree/v0.18.12> |
 | Vite | `^6.4.3` | Development and build tool | MIT | <https://vite.dev/> |
 | TypeScript | `^5.9.3` | Development compiler | Apache-2.0 | <https://www.typescriptlang.org/> |
 
@@ -17,10 +19,17 @@ license files for installed development packages are available in their
 respective package directories after running `npm ci`.
 
 The GitHub Pages artifact includes `THIRD_PARTY_LICENSES.txt`, containing
-notices and license terms for the runtime code distributed with the app.
+notices and license terms for the runtime code distributed with the app,
+including the fflate 0.8.2 module vendored by the Three.js addons and used by the FBX / 3MF import paths.
 The complete GNU Lesser General Public License 2.1 text is also distributed as
 `licenses/LGPL-2.1.txt`, with the Open CASCADE exception distributed as
 `licenses/OCCT-exception-1.0.txt`.
+
+linkedom is imported only by the Node.js real-DAE / 3MF fixture tests. It is not
+referenced from `src/` and is not emitted into the Vite / GitHub Pages runtime
+artifact. Its ISC notice is therefore retained in this repository-facing file
+but intentionally omitted from `public/THIRD_PARTY_LICENSES.txt`, which covers
+code actually distributed in the browser artifact.
 
 ## Three.js 0.185.1
 
@@ -46,6 +55,36 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+
+## fflate 0.8.2 vendored by the Three.js addons
+
+The Three.js `3MFLoader` and this application's FBX compressed-array preflight
+import the vendored `three/examples/jsm/libs/fflate.module.js` runtime module.
+
+Source for the exact vendored version:
+<https://github.com/101arrowz/fflate/tree/v0.8.2>
+
+MIT License
+
+Copyright (c) 2023 Arjun Barrett
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ## occt-wasm 4.3.1 TypeScript wrapper
 
@@ -124,3 +163,28 @@ WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 License for the specific language governing permissions and limitations under
 the License. The complete Apache-2.0 text is included in
 `public/THIRD_PARTY_LICENSES.txt`.
+
+## linkedom 0.18.12 (development/test only)
+
+linkedom supplies `DOMParser` to the Node.js tests that parse real DAE and 3MF
+fixtures through the Three.js addons. It is not browser runtime code and is not
+included in the GitHub Pages artifact.
+
+Source for the exact development dependency:
+<https://github.com/WebReflection/linkedom/tree/v0.18.12>
+
+ISC License
+
+Copyright (c) 2021, Andrea Giammarchi, @WebReflection
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.

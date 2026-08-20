@@ -4,6 +4,15 @@ export type ImportedMesh = THREE.Mesh<
   THREE.BufferGeometry,
   THREE.Material | THREE.Material[]
 >;
+export type ImportedPointCloud = THREE.Points<
+  THREE.BufferGeometry,
+  THREE.Material | THREE.Material[]
+>;
+export type ImportedLine = THREE.Line<
+  THREE.BufferGeometry,
+  THREE.Material | THREE.Material[]
+>;
+export type ImportedRenderable = ImportedMesh | ImportedPointCloud | ImportedLine;
 
 type OriginalMeshMaterial = THREE.Material | THREE.Material[];
 
@@ -15,10 +24,12 @@ export class ImportedAssetRuntime {
     ImportedMesh,
     OriginalMeshMaterial
   >();
+  readonly #renderableObjects = new Set<ImportedRenderable>();
   readonly #ownedGeometries = new Set<THREE.BufferGeometry>();
   readonly #ownedMaterials = new Set<THREE.Material>();
   readonly #ownedSkeletons = new Set<THREE.Skeleton>();
   readonly #ownedInstancedMeshes = new Set<THREE.InstancedMesh>();
+  readonly #ownedLights = new Set<THREE.Light>();
   #disposed = false;
 
   constructor(assetId: string, sourceRoot: THREE.Object3D) {
@@ -35,6 +46,12 @@ export class ImportedAssetRuntime {
     for (const mesh of this.#originalMeshMaterials.keys()) visitor(mesh);
   }
 
+  forEachRenderable(
+    visitor: (object: ImportedRenderable) => void,
+  ): void {
+    for (const object of this.#renderableObjects) visitor(object);
+  }
+
   restoreOriginalMaterials(): void {
     for (const [mesh, material] of this.#originalMeshMaterials) {
       mesh.material = material;
@@ -49,6 +66,9 @@ export class ImportedAssetRuntime {
     this.root.remove(this.sourceRoot);
 
     const textures = new Set<THREE.Texture>();
+    for (const light of this.#ownedLights) {
+      light.dispose();
+    }
     for (const instancedMesh of this.#ownedInstancedMeshes) {
       if (instancedMesh.morphTexture) {
         textures.add(instancedMesh.morphTexture);
@@ -76,10 +96,12 @@ export class ImportedAssetRuntime {
     for (const geometry of this.#ownedGeometries) geometry.dispose();
 
     this.#originalMeshMaterials.clear();
+    this.#renderableObjects.clear();
     this.#ownedMaterials.clear();
     this.#ownedGeometries.clear();
     this.#ownedSkeletons.clear();
     this.#ownedInstancedMeshes.clear();
+    this.#ownedLights.clear();
   }
 
   #captureOwnedResources(): void {
@@ -88,6 +110,9 @@ export class ImportedAssetRuntime {
         geometry?: unknown;
         material?: unknown;
       };
+      if (object instanceof THREE.Light) {
+        this.#ownedLights.add(object);
+      }
       if (
         object instanceof THREE.SkinnedMesh &&
         object.skeleton instanceof THREE.Skeleton
@@ -104,6 +129,11 @@ export class ImportedAssetRuntime {
       if (object instanceof THREE.Mesh) {
         const mesh = object as ImportedMesh;
         this.#originalMeshMaterials.set(mesh, mesh.material);
+        this.#renderableObjects.add(mesh);
+      } else if (object instanceof THREE.Points) {
+        this.#renderableObjects.add(object as ImportedPointCloud);
+      } else if (object instanceof THREE.Line) {
+        this.#renderableObjects.add(object as ImportedLine);
       }
 
       for (const material of asMaterials(renderable.material)) {
@@ -142,7 +172,7 @@ export class ImportedAssetStore {
     for (const resource of resources) {
       if (this.#ownedResources.has(resource)) {
         throw new Error(
-          "Imported assets must not share geometry, material, texture, image, skeleton, or instancing resources.",
+          "Imported assets must not share geometry, material, texture, image, skeleton, instancing, light, or shadow resources.",
         );
       }
     }
@@ -193,6 +223,9 @@ function collectOwnedResourceIdentities(
       geometry?: unknown;
       material?: unknown;
     };
+    if (object instanceof THREE.Light) {
+      collectLightResourceIdentities(object, resources);
+    }
     if (
       object instanceof THREE.SkinnedMesh &&
       object.skeleton instanceof THREE.Skeleton
@@ -226,6 +259,36 @@ function collectOwnedResourceIdentities(
     collectImageIdentities(texture.source.data, resources);
   }
   return resources;
+}
+
+function collectLightResourceIdentities(
+  light: THREE.Light,
+  resources: Set<object>,
+): void {
+  resources.add(light);
+  const shadow = (light as THREE.Light & {
+    shadow?: THREE.LightShadow;
+  }).shadow;
+  if (!shadow) return;
+  resources.add(shadow);
+  collectRenderTargetIdentities(shadow.map, resources);
+  collectRenderTargetIdentities(shadow.mapPass, resources);
+}
+
+function collectRenderTargetIdentities(
+  target: THREE.RenderTarget | null,
+  resources: Set<object>,
+): void {
+  if (!target) return;
+  resources.add(target);
+  resources.add(target.texture);
+  if (target.depthTexture) resources.add(target.depthTexture);
+  collectImageIdentities(target.texture.image, resources);
+  collectImageIdentities(target.texture.source.data, resources);
+  if (target.depthTexture) {
+    collectImageIdentities(target.depthTexture.image, resources);
+    collectImageIdentities(target.depthTexture.source.data, resources);
+  }
 }
 
 function collectImageIdentities(value: unknown, resources: Set<object>): void {

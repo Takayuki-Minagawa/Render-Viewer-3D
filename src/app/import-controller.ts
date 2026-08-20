@@ -206,7 +206,7 @@ function createImportedSceneRecord(
     materialCount: imported.metadata.materialCount ?? 0,
     animationCount: imported.root.animations.length,
     unit: imported.metadata.unit,
-    sourceUnit: sourceUnitForFormat(imported.metadata.format),
+    sourceUnit: imported.metadata.sourceUnit,
     sizeBytes: primary.size,
   };
   return {
@@ -226,12 +226,6 @@ function createImportedSceneRecord(
     warnings: imported.warnings.map(({ code, message }) => ({ code, message })),
     hierarchy,
   };
-}
-
-function sourceUnitForFormat(format: string): string | undefined {
-  if (format === "glTF") return "meter";
-  if (format === "STEP") return "millimeter";
-  return undefined;
 }
 
 function triangleCount(geometry: THREE.BufferGeometry): number {

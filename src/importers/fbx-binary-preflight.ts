@@ -1,7 +1,9 @@
-const FBX_BINARY_MAGIC = new TextEncoder().encode(
-  "Kaydara FBX Binary  \0\u001a\0",
+const FBX_BINARY_SIGNATURE = new TextEncoder().encode(
+  "Kaydara FBX Binary  \0",
 );
-const FBX_VERSION_OFFSET = FBX_BINARY_MAGIC.byteLength;
+const FBX_BINARY_EXTENSION = Uint8Array.of(0x1a, 0x00);
+const FBX_VERSION_OFFSET =
+  FBX_BINARY_SIGNATURE.byteLength + FBX_BINARY_EXTENSION.byteLength;
 const FBX_CONTENT_OFFSET = FBX_VERSION_OFFSET + 4;
 const LEGACY_NODE_HEADER_BYTES = 13;
 const MODERN_NODE_HEADER_BYTES = 25;
@@ -69,6 +71,7 @@ interface PreflightState {
   nodeCount: number;
   propertyCount: number;
   totalArrayExpandedBytes: number;
+  globalSettingsCount: number;
   declaredUpAxis?: FBXSourceCoordinateSystem;
   readonly compressedArrays: CompressedArrayPayload[];
 }
@@ -94,9 +97,19 @@ export async function inspectBinaryFBX(
 ): Promise<FBXBinaryPreflightResult> {
   validateLimits(limits);
   const bytes = new Uint8Array(source);
-  if (!hasBinaryMagic(bytes)) return { isBinary: false };
+  if (!hasLoaderBinarySignature(bytes)) return { isBinary: false };
   if (bytes.byteLength < FBX_CONTENT_OFFSET) {
     throw new Error("The binary FBX header is truncated.");
+  }
+  for (let index = 0; index < FBX_BINARY_EXTENSION.byteLength; index += 1) {
+    if (
+      bytes[FBX_BINARY_SIGNATURE.byteLength + index] !==
+      FBX_BINARY_EXTENSION[index]
+    ) {
+      throw new Error(
+        "The binary FBX header contains invalid extension bytes.",
+      );
+    }
   }
 
   const view = new DataView(source);
@@ -111,6 +124,7 @@ export async function inspectBinaryFBX(
     nodeCount: 0,
     propertyCount: 0,
     totalArrayExpandedBytes: 0,
+    globalSettingsCount: 0,
     compressedArrays: [],
   };
   const frames: ParseFrame[] = [
@@ -224,6 +238,14 @@ export async function inspectBinaryFBX(
       offset,
       nameLength,
     );
+    if (nodeContext === "global-settings") {
+      state.globalSettingsCount += 1;
+      if (state.globalSettingsCount > 1) {
+        throw new Error(
+          "The binary FBX contains duplicate top-level GlobalSettings nodes.",
+        );
+      }
+    }
     offset += nameLength;
     assertSpan(offset, propertyListBytes, endOffset, "property list");
     const propertyEnd = offset + propertyListBytes;
@@ -599,10 +621,12 @@ async function validateCompressedArrays(
   }
 }
 
-function hasBinaryMagic(bytes: Uint8Array): boolean {
-  if (bytes.byteLength < FBX_BINARY_MAGIC.byteLength) return false;
-  for (let index = 0; index < FBX_BINARY_MAGIC.byteLength; index += 1) {
-    if (bytes[index] !== FBX_BINARY_MAGIC[index]) return false;
+function hasLoaderBinarySignature(bytes: Uint8Array): boolean {
+  if (bytes.byteLength < FBX_BINARY_SIGNATURE.byteLength) return false;
+  for (let index = 0; index < FBX_BINARY_SIGNATURE.byteLength; index += 1) {
+    if (bytes[index] !== FBX_BINARY_SIGNATURE[index]) {
+      return false;
+    }
   }
   return true;
 }

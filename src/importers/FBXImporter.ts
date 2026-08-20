@@ -51,28 +51,110 @@ function inspectAsciiFBXUpAxis(
   if (signature.startsWith("Kaydara FBX Binary")) return undefined;
 
   const text = decoder.decode(source);
-  const settingsMatch =
-    /^[\t ]*GlobalSettings[\t ]*:[\t ]*\{/gmu.exec(text);
-  if (!settingsMatch) return undefined;
-  const openingBrace = settingsMatch.index + settingsMatch[0].lastIndexOf("{");
+  // Three's TextParser only recognizes a top-level node when its name starts
+  // in column zero. Do not treat an indented/nested GlobalSettings node as the
+  // root node that FBXTreeParser will consume.
+  const settingsMatches = matchDirectAsciiLines(
+    text,
+    -1,
+    text.length,
+    /^GlobalSettings:[^\r\n]*\{/u,
+  );
+  if (settingsMatches.length === 0) return undefined;
+  if (settingsMatches.length > 1) {
+    throw new Error(
+      "The ASCII FBX contains duplicate top-level GlobalSettings nodes.",
+    );
+  }
+  const [{ lineStart, match: settingsMatch }] = settingsMatches;
+  const openingBrace = lineStart + settingsMatch[0].lastIndexOf("{");
   const closingBrace = findClosingBrace(text, openingBrace);
   if (closingBrace === undefined) return undefined;
 
-  const settings = text.slice(openingBrace + 1, closingBrace);
-  const axes = new Set<number>();
-  const propertyPattern =
-    /^[\t ]*P[\t ]*:[\t ]*"UpAxis"[\t ]*,[^\r\n]*,[\t ]*(-?\d+)[\t ]*$/gmu;
-  for (const match of settings.matchAll(propertyPattern)) {
-    axes.add(Number(match[1]));
-  }
-  if (axes.size !== 1) return undefined;
-
-  const [axis] = axes;
-  if (axis === 1) return "y-up";
-  if (axis === 2) return "z-up";
-  throw new Error(
-    `Unsupported FBX UpAxis value: ${axis}. Convert the file to Y-up or Z-up before importing.`,
+  let declaredAxis: number | undefined;
+  // These indentation and whitespace constraints mirror TextParser.parse().
+  const propertyPattern = /^\t\tP:[\t ](.*)$/u;
+  let hasUpAxisDeclaration = false;
+  const propertiesBlocks = findDirectAsciiNodeBlocks(
+    text,
+    openingBrace,
+    closingBrace,
+    /^\tProperties70:[^\r\n]*\{/u,
   );
+  for (const block of propertiesBlocks) {
+    for (const { match } of matchDirectAsciiLines(
+      text,
+      block.openingBrace,
+      block.closingBrace,
+      propertyPattern,
+    )) {
+      const property = parseAsciiSpecialProperty(match[1]);
+      if (property.name !== "UpAxis") continue;
+
+      const axis =
+        typeof property.value === "number" &&
+        Number.isFinite(property.value)
+          ? property.value
+          : undefined;
+      if (hasUpAxisDeclaration) {
+        throw new Error(
+          declaredAxis !== undefined && declaredAxis === axis
+            ? "The ASCII FBX contains duplicate UpAxis declarations."
+            : "The ASCII FBX contains conflicting UpAxis declarations.",
+        );
+      }
+      hasUpAxisDeclaration = true;
+      if (axis === undefined) continue;
+      if (axis !== 1 && axis !== 2) {
+        throw new Error(
+          `Unsupported FBX UpAxis value: ${axis}. Convert the file to Y-up or Z-up before importing.`,
+        );
+      }
+      declaredAxis = axis;
+    }
+  }
+  if (declaredAxis === undefined) return undefined;
+
+  return declaredAxis === 1 ? "y-up" : "z-up";
+}
+
+interface AsciiSpecialProperty {
+  readonly name: string;
+  readonly value: number | string | undefined;
+}
+
+function parseAsciiSpecialProperty(source: string): AsciiSpecialProperty {
+  // Keep this deliberately in lockstep with TextParser.parseNodeProperty()
+  // and parseNodeSpecialProperty() in Three's FBXLoader.
+  const propertyValue = source
+    .replace(/^"/u, "")
+    .replace(/"$/u, "")
+    .trim();
+  const fields = propertyValue.split('",').map((field) =>
+    field
+      .trim()
+      .replace(/^"/u, "")
+      .replace(/\s/u, "_"),
+  );
+  const name = fields[0] ?? "";
+  const type = fields[1];
+  let value: number | string | undefined = fields[4];
+
+  switch (type) {
+    case "int":
+    case "enum":
+    case "bool":
+    case "ULongLong":
+    case "double":
+    case "Number":
+    case "FieldOfView":
+      value = Number.parseFloat(value ?? "");
+      break;
+    default:
+      break;
+  }
+
+  return { name, value };
 }
 
 function findClosingBrace(
@@ -112,6 +194,102 @@ function findClosingBrace(
     }
   }
   return undefined;
+}
+
+interface AsciiNodeBlock {
+  readonly openingBrace: number;
+  readonly closingBrace: number;
+}
+
+interface DirectAsciiLineMatch {
+  readonly lineStart: number;
+  readonly match: RegExpMatchArray;
+}
+
+function findDirectAsciiNodeBlocks(
+  text: string,
+  parentOpeningBrace: number,
+  parentClosingBrace: number,
+  nodePattern: RegExp,
+): readonly AsciiNodeBlock[] {
+  const blocks: AsciiNodeBlock[] = [];
+  for (const { lineStart, match } of matchDirectAsciiLines(
+    text,
+    parentOpeningBrace,
+    parentClosingBrace,
+    nodePattern,
+  )) {
+    const openingBrace = lineStart + match[0].lastIndexOf("{");
+    const closingBrace = findClosingBrace(text, openingBrace);
+    if (closingBrace !== undefined && closingBrace <= parentClosingBrace) {
+      blocks.push({ openingBrace, closingBrace });
+    }
+  }
+  return blocks;
+}
+
+function matchDirectAsciiLines(
+  text: string,
+  parentOpeningBrace: number,
+  parentClosingBrace: number,
+  pattern: RegExp,
+): readonly DirectAsciiLineMatch[] {
+  const matches: DirectAsciiLineMatch[] = [];
+  let depth = 1;
+  let inString = false;
+  let escaped = false;
+  let inComment = false;
+
+  for (
+    let index = parentOpeningBrace + 1;
+    index < parentClosingBrace;
+    index += 1
+  ) {
+    const previous = text[index - 1];
+    const atLineStart =
+      index === 0 || previous === "\n" || previous === "\r";
+    if (atLineStart && depth === 1 && !inString && !inComment) {
+      let lineEnd = index;
+      while (
+        lineEnd < parentClosingBrace &&
+        text[lineEnd] !== "\n" &&
+        text[lineEnd] !== "\r"
+      ) {
+        lineEnd += 1;
+      }
+      const match = text.slice(index, lineEnd).match(pattern);
+      if (match) matches.push({ lineStart: index, match });
+    }
+
+    const character = text[index];
+    if (inComment) {
+      if (character === "\n" || character === "\r") {
+        inComment = false;
+      }
+      continue;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === ";") {
+      inComment = true;
+    } else if (character === '"') {
+      inString = true;
+    } else if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+    }
+  }
+
+  return matches;
 }
 
 function undoLoaderAxisCorrection(

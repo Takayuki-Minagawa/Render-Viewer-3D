@@ -147,7 +147,7 @@ POV-Ray概念プロファイルは自動更新されません。
 - 読み込んだThree.js assetはブラウザメモリだけに保持します。SceneModelのimport recordだけではモデルを復元できず、ページ再読み込み後は再importが必要です。
 - main threadで解析するGLB / glTF、FBX、DAE（各sidecarを含む）、OBJ、STL、PLYは、UI停止を避けるため選択ファイル合計32 MiBまでです。STEPはWorkerで解析し、入力128 MiB、出力200万頂点・200万triangleまでに制限します。
 - binary FBXはLoaderを作成する前にnode / property / depth、圧縮配列の宣言展開量とstreaming実展開量、圧縮比を検査します。
-- DAEはDOCTYPE / ENTITY、`instance_node`、過大なXML要素数・汎用markup深さをDOM構築前、過大なscene node数・深さをLoader作成前に拒否します。
+- DAEはDOCTYPE / ENTITY、過大なXML要素数・汎用markup深さをDOM構築前に拒否し、`instance_node`参照と過大なscene node数・深さをLoader作成前に拒否します。
 - 3MFは圧縮archive 16 MiB、4,096 entry、1 entryの展開後8 MiB、展開後合計128 MiB、圧縮比200:1を上限とし、ZIP64を受け付けません。全entryのstreaming実展開量を測定して宣言値との完全一致も要求します。XMLはDOM構築前に100,000要素・深さ256へ制限し、DOCTYPE / ENTITYを拒否します。
 - Experimental 3MFは単一のroot `3D/*.model` partだけに対応し、multi-part、model relationship part、texture resourceを明示的に拒否します。
 - PLY / FBX / DAE / 3MFの解析結果は50,000 scene node、深さ256、10,000 renderable、200万position vertex、200万vertex reference、200万primitiveまでです。

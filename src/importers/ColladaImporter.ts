@@ -42,23 +42,23 @@ export interface ColladaImporterDependencies {
   ) => ColladaLoaderLike | Promise<ColladaLoaderLike>;
 }
 
-function directChildrenByLocalName(
+function directChildrenByNodeName(
   parent: Element,
-  localName: string,
+  nodeName: string,
 ): Element[] {
   return Array.from(parent.children).filter(
-    (child) => child.localName.toLowerCase() === localName,
+    (child) => child.nodeName === nodeName,
   );
 }
 
 function optionalDirectChild(
   parent: Element,
-  localName: string,
+  nodeName: string,
 ): Element | undefined {
-  const matches = directChildrenByLocalName(parent, localName);
+  const matches = directChildrenByNodeName(parent, nodeName);
   if (matches.length > 1) {
     throw new Error(
-      `COLLADA contains more than one direct ${localName} element.`,
+      `COLLADA contains more than one direct ${nodeName} element.`,
     );
   }
   return matches[0];
@@ -70,7 +70,7 @@ function inspectColladaAsset(source: string): ColladaAssetMetadata {
   const root = document.documentElement;
   if (
     !root ||
-    root.localName.toLowerCase() !== "collada" ||
+    root.nodeName !== "COLLADA" ||
     document.getElementsByTagName("parsererror").length > 0
   ) {
     throw new Error("COLLADA source is not well-formed COLLADA XML.");

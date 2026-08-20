@@ -122,6 +122,77 @@ describe("ThreeMFImporter browser-format fixture", () => {
     assert.equal(explicitImported.metadata.sourceUnit, "centimeter");
   });
 
+  it("accepts exact finite 12-number component and build transforms", async () => {
+    const transform = "1 0 0 0 1 0 0 0 1 2.5 -3 4";
+    const meshObject = [
+      '<object id="1"><mesh>',
+      '<vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices>',
+      '<triangles><triangle v1="0" v2="1" v3="2"/></triangles>',
+      "</mesh></object>",
+    ].join("");
+    const componentObject =
+      `<object id="2"><components><component objectid="1" transform="${transform}"/></components></object>`;
+    let factoryCalls = 0;
+    const importer = new ThreeMFImporter(async () => {
+      factoryCalls += 1;
+      return { parse: () => new THREE.Group() };
+    });
+    const archive = createThreeMFPackageFromModel(
+      modelWithObjects(meshObject + componentObject, "2", transform),
+    );
+    const primary = new File([archive], "valid-transforms.3mf");
+
+    await importer.import(primary, [primary], importOptions());
+    assert.equal(factoryCalls, 1);
+  });
+
+  it("rejects unsafe component and build transforms before loader creation", async () => {
+    const identity = "1 0 0 0 1 0 0 0 1 0 0 0";
+    const invalidTransforms = [
+      "",
+      `NaN ${identity.slice(2)}`,
+      `Infinity ${identity.slice(2)}`,
+      "1 0 0 0 1 0 0 0 1 0 0",
+      `${identity} 0`,
+      identity.replace("1 0", "1  0"),
+      `1garbage ${identity.slice(2)}`,
+      `1e309 ${identity.slice(2)}`,
+      "1".repeat(513),
+    ];
+    const meshObject = [
+      '<object id="1"><mesh>',
+      '<vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices>',
+      '<triangles><triangle v1="0" v2="1" v3="2"/></triangles>',
+      "</mesh></object>",
+    ].join("");
+
+    for (const target of ["component", "item"]) {
+      for (const transform of invalidTransforms) {
+        const objects = target === "component"
+          ? meshObject +
+            `<object id="2"><components><component objectid="1" transform="${transform}"/></components></object>`
+          : meshObject;
+        const buildObjectId = target === "component" ? "2" : "1";
+        const buildTransform = target === "item" ? transform : undefined;
+        let factoryCalls = 0;
+        const importer = new ThreeMFImporter(async () => {
+          factoryCalls += 1;
+          return { parse: () => new THREE.Group() };
+        });
+        const archive = createThreeMFPackageFromModel(
+          modelWithObjects(objects, buildObjectId, buildTransform),
+        );
+        const primary = new File([archive], `unsafe-${target}-transform.3mf`);
+
+        await assert.rejects(
+          importer.import(primary, [primary], importOptions()),
+          /transform (?:exceeds|must contain exactly 12 finite decimal numbers)/u,
+        );
+        assert.equal(factoryCalls, 0);
+      }
+    }
+  });
+
   it("rejects prototype-chain names as unsupported model units", async () => {
     const archive = createThreeMFFixture({ unit: "constructor" });
     const primary = new File([archive], "bad-unit.3mf");
@@ -272,7 +343,7 @@ describe("ThreeMFImporter browser-format fixture", () => {
       [
         createThreeMFPackageFromModel(
           modelWithObjects(
-            `<metadata><basematerials id="constructor"/></metadata>${meshObject}`,
+            `<extension><basematerials id="constructor"/></extension>${meshObject}`,
             "1",
           ),
         ),
@@ -281,9 +352,58 @@ describe("ThreeMFImporter browser-format fixture", () => {
       [
         createThreeMFPackageFromModel(
           modelWithObjects(
+            `<extension><metadata name="shadow">shadow</metadata></extension>${meshObject}`,
+            "1",
+          ),
+        ),
+        /Nested 3MF model metadata elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          modelWithObjects(
+            '<basematerials id="2"><wrapper><base name="shadow" displaycolor="#FFFFFFFF"/></wrapper></basematerials>' +
+              meshObject,
+            "1",
+          ),
+        ),
+        /Nested 3MF base in basematerials elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          modelWithObjects(
+            '<texture2dgroup id="2"><wrapper><tex2coord u="0" v="0"/></wrapper></texture2dgroup>' +
+              meshObject,
+            "1",
+          ),
+        ),
+        /Nested 3MF tex2coord in texture2dgroup elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          modelWithObjects(
+            '<colorgroup id="2"><wrapper><color color="#FFFFFFFF"/></wrapper></colorgroup>' +
+              meshObject,
+            "1",
+          ),
+        ),
+        /Nested 3MF color in colorgroup elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          modelWithObjects(
+            '<pbmetallicdisplayproperties id="2"><wrapper><pbmetallic name="shadow"/></wrapper></pbmetallicdisplayproperties>' +
+              meshObject,
+            "1",
+          ),
+        ),
+        /Nested 3MF pbmetallic in pbmetallicdisplayproperties elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          modelWithObjects(
             [
               '<object id="1"><mesh>',
-              '<metadata><vertices><vertex x="0" y="0" z="0"/></vertices></metadata>',
+              '<extension><vertices><vertex x="0" y="0" z="0"/></vertices></extension>',
               '<vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices>',
               '<triangles><triangle v1="0" v2="1" v3="2"/></triangles>',
               "</mesh></object>",
@@ -299,7 +419,7 @@ describe("ThreeMFImporter browser-format fixture", () => {
             [
               '<object id="1"><mesh>',
               '<vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices>',
-              '<metadata><triangles><triangle v1="0" v2="1" v3="2"/></triangles></metadata>',
+              '<extension><triangles><triangle v1="0" v2="1" v3="2"/></triangles></extension>',
               '<triangles><triangle v1="0" v2="1" v3="2"/></triangles>',
               "</mesh></object>",
             ].join(""),
@@ -344,7 +464,7 @@ describe("ThreeMFImporter browser-format fixture", () => {
     const model = modelWithObjects(
       [
         siblings,
-        '<metadata><basematerials id="constructor"/></metadata>',
+        '<extension><basematerials id="constructor"/></extension>',
         '<object id="1"><mesh><vertices/><triangles/></mesh></object>',
       ].join(""),
       "1",
@@ -428,12 +548,15 @@ function createThreeMFFixture({
   );
 }
 
-function modelWithObjects(objects, buildObjectId) {
+function modelWithObjects(objects, buildObjectId, buildTransform) {
+  const transform = buildTransform === undefined
+    ? ""
+    : ` transform="${buildTransform}"`;
   return [
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
     "<model unit=\"millimeter\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">",
     `<resources>${objects}</resources>`,
-    `<build><item objectid="${buildObjectId}"/></build>`,
+    `<build><item objectid="${buildObjectId}"${transform}/></build>`,
     "</model>",
   ].join("");
 }

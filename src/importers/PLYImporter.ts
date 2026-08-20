@@ -13,6 +13,32 @@ const DEFAULT_POINT_SIZE = 0.01;
 export const MAX_PLY_HEADER_BYTES = 64 * 1024;
 export const MAX_PLY_ELEMENT_COUNT = 2_000_000;
 const MAX_PLY_ZERO_PROPERTY_ELEMENT_COUNT = 100_000;
+const PLY_FORMATS = new Set([
+  "ascii",
+  "binary_little_endian",
+  "binary_big_endian",
+]);
+const PLY_INTEGER_TYPES = new Set([
+  "char",
+  "uchar",
+  "short",
+  "ushort",
+  "int",
+  "uint",
+  "int8",
+  "uint8",
+  "int16",
+  "uint16",
+  "int32",
+  "uint32",
+]);
+const PLY_SCALAR_TYPES = new Set([
+  ...PLY_INTEGER_TYPES,
+  "float",
+  "double",
+  "float32",
+  "float64",
+]);
 
 interface PLYLoaderLike {
   parse(data: ArrayBuffer): THREE.BufferGeometry;
@@ -123,6 +149,11 @@ function inspectPlyHeader(data: ArrayBuffer): boolean {
   }
 
   const header = new TextDecoder().decode(bytes.subarray(0, headerEnd));
+  const lines = header.split(/\r\n|\r|\n/u);
+  if (lines[0] !== "ply") {
+    throw new Error('PLY header must begin with the exact "ply" magic line.');
+  }
+
   const elements: Array<{
     name: string;
     count: number;
@@ -130,16 +161,33 @@ function inspectPlyHeader(data: ArrayBuffer): boolean {
   }> = [];
   let currentElement: (typeof elements)[number] | undefined;
   let totalElementCount = 0;
-  for (const rawLine of header.split(/\r\n|\r|\n/u)) {
+  let format: string | undefined;
+  for (const rawLine of lines.slice(1)) {
     const line = rawLine.trim();
-    if (/^element\b/iu.test(line)) {
-      const declaration = /^element\s+(\S+)\s+(\S+)\s*$/iu.exec(line);
-      if (!declaration) {
+    if (line === "") continue;
+    const tokens = line.split(/\s+/u);
+    const lineType = tokens[0];
+    if (lineType === "format") {
+      if (format !== undefined) {
+        throw new Error("PLY header must contain exactly one format declaration.");
+      }
+      if (
+        tokens.length !== 3 ||
+        !PLY_FORMATS.has(tokens[1]) ||
+        tokens[2] !== "1.0"
+      ) {
+        throw new Error(
+          "PLY format must be ascii, binary_little_endian, or binary_big_endian version 1.0.",
+        );
+      }
+      format = tokens[1];
+    } else if (lineType === "element") {
+      if (tokens.length !== 3) {
         throw new Error(
           "PLY element declaration must contain a name and non-negative integer count.",
         );
       }
-      const [, name, rawCount] = declaration;
+      const [, name, rawCount] = tokens;
       if (!/^\d+$/u.test(rawCount)) {
         throw new Error(
           `PLY ${name} element declaration must contain a non-negative integer count.`,
@@ -160,11 +208,19 @@ function inspectPlyHeader(data: ArrayBuffer): boolean {
           `PLY total element count exceeds the ${MAX_PLY_ELEMENT_COUNT} synchronous parse safety limit.`,
         );
       }
-      currentElement = { name: name.toLowerCase(), count, propertyCount: 0 };
+      currentElement = { name, count, propertyCount: 0 };
       elements.push(currentElement);
-    } else if (/^property\b/iu.test(line) && currentElement) {
+    } else if (lineType === "property") {
+      if (!currentElement) {
+        throw new Error("PLY property declaration must follow an element declaration.");
+      }
+      validatePlyPropertyDeclaration(tokens);
       currentElement.propertyCount += 1;
     }
+  }
+
+  if (format === undefined) {
+    throw new Error("PLY header must contain exactly one format declaration.");
   }
 
   for (const element of elements) {
@@ -179,6 +235,27 @@ function inspectPlyHeader(data: ArrayBuffer): boolean {
     throw new Error("PLY header contains multiple face element declarations.");
   }
   return (faceElements[0]?.count ?? 0) > 0;
+}
+
+function validatePlyPropertyDeclaration(tokens: readonly string[]): void {
+  if (tokens[1] === "list") {
+    if (
+      tokens.length !== 5 ||
+      !PLY_INTEGER_TYPES.has(tokens[2]) ||
+      !PLY_SCALAR_TYPES.has(tokens[3])
+    ) {
+      throw new Error(
+        "PLY list property declaration must contain an integer count type, scalar item type, and name.",
+      );
+    }
+    return;
+  }
+
+  if (tokens.length !== 3 || !PLY_SCALAR_TYPES.has(tokens[1])) {
+    throw new Error(
+      "PLY scalar property declaration must contain a supported scalar type and name.",
+    );
+  }
 }
 
 function findHeaderEnd(bytes: Uint8Array): number {

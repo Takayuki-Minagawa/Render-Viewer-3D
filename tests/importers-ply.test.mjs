@@ -249,6 +249,118 @@ describe("PLYImporter", () => {
       /face element declaration must contain a non-negative integer/,
     );
 
+    for (const [headerLines, expected] of [
+      [
+        [
+          "PLY",
+          "format ascii 1.0",
+          "element vertex 0",
+          "end_header",
+          "",
+        ],
+        /exact "ply" magic line/u,
+      ],
+      [
+        [
+          "ply",
+          "FORMAT ascii 1.0",
+          "element vertex 0",
+          "end_header",
+          "",
+        ],
+        /exactly one format declaration/u,
+      ],
+      [
+        [
+          "ply",
+          "format binary_middle_endian 1.0",
+          "element vertex 0",
+          "end_header",
+          "",
+        ],
+        /PLY format must be ascii, binary_little_endian, or binary_big_endian version 1\.0/u,
+      ],
+      [
+        [
+          "ply",
+          "format ascii 2.0",
+          "element vertex 0",
+          "end_header",
+          "",
+        ],
+        /PLY format must be ascii, binary_little_endian, or binary_big_endian version 1\.0/u,
+      ],
+      [
+        [
+          "ply",
+          "format ascii 1.0",
+          "format ascii 1.0",
+          "element vertex 0",
+          "end_header",
+          "",
+        ],
+        /exactly one format declaration/u,
+      ],
+    ]) {
+      const invalidHeader = plyFile(
+        headerLines.join("\n"),
+        "invalid-header.ply",
+      );
+      await assert.rejects(
+        importer.import(invalidHeader, [invalidHeader], options()),
+        expected,
+      );
+    }
+
+    const ignoredUppercaseProperty = plyFile(
+      [
+        "ply",
+        "format ascii 1.0",
+        "element vertex 2000000",
+        "PROPERTY float x",
+        "end_header",
+        "",
+      ].join("\n"),
+      "uppercase-property.ply",
+    );
+    await assert.rejects(
+      importer.import(
+        ignoredUppercaseProperty,
+        [ignoredUppercaseProperty],
+        options(),
+      ),
+      /vertex element has no properties and exceeds the 100000 zero-width parse safety limit/u,
+    );
+
+    for (const [declaration, expected] of [
+      ["property float", /scalar property declaration/u],
+      ["property half x", /scalar property declaration/u],
+      ["property float x extra", /scalar property declaration/u],
+      ["property list float int values", /list property declaration/u],
+      ["property list uchar half values", /list property declaration/u],
+      ["property list uchar int", /list property declaration/u],
+    ]) {
+      const malformedProperty = plyFile(
+        [
+          "ply",
+          "format ascii 1.0",
+          "element vertex 1",
+          declaration,
+          "end_header",
+          "",
+        ].join("\n"),
+        "malformed-property.ply",
+      );
+      await assert.rejects(
+        importer.import(
+          malformedProperty,
+          [malformedProperty],
+          options(),
+        ),
+        expected,
+      );
+    }
+
     for (const [declaration, expected] of [
       [
         "element junk 4294967295",
@@ -306,6 +418,42 @@ describe("PLYImporter", () => {
       /total element count exceeds the 2000000 synchronous parse safety limit/u,
     );
     assert.equal(factoryCalls, 0);
+  });
+
+  it("keeps element names case-sensitive like PLYLoader", async () => {
+    const primary = plyFile(
+      [
+        "ply",
+        "format ascii 1.0",
+        "element vertex 3",
+        "property float x",
+        "property float y",
+        "property float z",
+        "element FACE 1",
+        "property list uchar int vertex_indices",
+        "end_header",
+        "0 0 0",
+        "1 0 0",
+        "0 1 0",
+        "3 0 1 2",
+        "",
+      ].join("\n"),
+      "uppercase-face.ply",
+    );
+
+    const imported = await new PLYImporter().import(
+      primary,
+      [primary],
+      options(),
+    );
+    const points = findObject(
+      imported.root,
+      (object) => object instanceof THREE.Points,
+      "Expected uppercase FACE to be ignored by PLYLoader",
+    );
+
+    assert.equal(points.geometry.getAttribute("position").count, 3);
+    assert.equal(imported.metadata.triangleCount, 0);
   });
 
   it("rejects oversized parsed point geometry and disposes it", async () => {

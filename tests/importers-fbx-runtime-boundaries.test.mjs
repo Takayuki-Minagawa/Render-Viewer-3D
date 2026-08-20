@@ -169,6 +169,18 @@ function binaryFBXWithAxes(values) {
   ]);
 }
 
+function asciiGlobalSettings(axis) {
+  return [
+    "GlobalSettings: {",
+    "\tProperties70: {",
+    ...(axis === undefined
+      ? []
+      : [`\t\tP: \"UpAxis\", \"int\", \"Integer\", \"\",${axis}`]),
+    "\t}",
+    "}",
+  ].join("\n");
+}
+
 function triangleMesh() {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
@@ -262,6 +274,265 @@ describe("FBX binary runtime boundaries", () => {
       await assert.rejects(
         importer.import(primary, [primary], options()),
         expected,
+      );
+      assert.equal(factoryCalls, 0);
+    }
+  });
+
+  it("rejects duplicate top-level GlobalSettings before loader creation", async () => {
+    const cases = [
+      [
+        `${asciiGlobalSettings(2)}\n${asciiGlobalSettings(undefined)}`,
+        /duplicate top-level GlobalSettings nodes/u,
+      ],
+      [
+        binaryFBX([
+          {
+            name: "GlobalSettings",
+            children: [
+              {
+                name: "Properties70",
+                children: [upAxisProperty(2)],
+              },
+            ],
+          },
+          { name: "GlobalSettings" },
+        ]),
+        /duplicate top-level GlobalSettings nodes/u,
+      ],
+    ];
+
+    for (const [source, expected] of cases) {
+      let factoryCalls = 0;
+      const importer = new FBXImporter({
+        createLoader() {
+          factoryCalls += 1;
+          return { parse: () => new THREE.Group() };
+        },
+        createTgaLoader(manager) {
+          factoryCalls += 1;
+          return new THREE.Loader(manager);
+        },
+      });
+      const primary = new File([source], "duplicate-settings.fbx");
+
+      await assert.rejects(
+        importer.import(primary, [primary], options()),
+        expected,
+      );
+      assert.equal(factoryCalls, 0);
+    }
+  });
+
+  it("rejects duplicate and conflicting ASCII UpAxis declarations before loader creation", async () => {
+    const cases = [
+      [
+        asciiGlobalSettings(1).replace(
+          "\t}",
+          '\t\tP: "UpAxis", "int", "Integer", "",1\n\t}',
+        ),
+        /duplicate UpAxis declarations/u,
+      ],
+      [
+        asciiGlobalSettings(1).replace(
+          "\t}",
+          '\t\tP: "UpAxis", "int", "Integer", "",2\n\t}',
+        ),
+        /conflicting UpAxis declarations/u,
+      ],
+    ];
+
+    for (const [source, expected] of cases) {
+      let factoryCalls = 0;
+      const importer = new FBXImporter({
+        createLoader() {
+          factoryCalls += 1;
+          return { parse: () => new THREE.Group() };
+        },
+        createTgaLoader(manager) {
+          factoryCalls += 1;
+          return new THREE.Loader(manager);
+        },
+      });
+      const primary = new File([source], "duplicate-axis.fbx");
+
+      await assert.rejects(
+        importer.import(primary, [primary], options()),
+        expected,
+      );
+      assert.equal(factoryCalls, 0);
+    }
+  });
+
+  it("does not treat an indented nested ASCII GlobalSettings node as top-level", async () => {
+    const source = [
+      "Objects: {",
+      "\tGlobalSettings: {",
+      "\t\tProperties70: {",
+      '\t\t\tP: "UpAxis", "int", "Integer", "",0',
+      "\t\t}",
+      "\t}",
+      "}",
+    ].join("\n");
+    let loaderFactoryCalls = 0;
+    const scene = new THREE.Group();
+    scene.add(triangleMesh());
+    const importer = importerForScene(scene, {
+      createLoader() {
+        loaderFactoryCalls += 1;
+        return { parse: () => scene };
+      },
+    });
+    const primary = new File([source], "nested-settings.fbx");
+
+    await importer.import(primary, [primary], options());
+
+    assert.equal(loaderFactoryCalls, 1);
+  });
+
+  it("ignores ASCII axis declarations that TextParser does not recognize", async () => {
+    const cases = [
+      [
+        "space-indented.fbx",
+        [
+          "GlobalSettings: {",
+          "  Properties70: {",
+          '    P: "UpAxis", "int", "Integer", "",1',
+          "  }",
+          "}",
+        ].join("\n"),
+      ],
+      [
+        "missing-property-space.fbx",
+        [
+          "GlobalSettings: {",
+          "\tProperties70: {",
+          '\t\tP:"UpAxis", "int", "Integer", "",1',
+          "\t}",
+          "}",
+        ].join("\n"),
+      ],
+      [
+        "column-zero-nested-settings.fbx",
+        [
+          "Objects: {",
+          "GlobalSettings: {",
+          "\tProperties70: {",
+          '\t\tP: "UpAxis", "int", "Integer", "",1',
+          "\t}",
+          "}",
+          "}",
+        ].join("\n"),
+      ],
+    ];
+
+    for (const [name, source] of cases) {
+      const scene = new THREE.Group();
+      scene.rotation.x = -Math.PI / 2;
+      scene.add(triangleMesh());
+      let loaderFactoryCalls = 0;
+      const importer = importerForScene(scene, {
+        createLoader() {
+          loaderFactoryCalls += 1;
+          return { parse: () => scene };
+        },
+      });
+      const primary = new File([source], name);
+
+      const imported = await importer.import(primary, [primary], options());
+
+      assert.equal(loaderFactoryCalls, 1);
+      assert.equal(scene.rotation.x, 0);
+      assert.ok(Math.abs(imported.root.rotation.x + Math.PI / 2) < 1e-12);
+    }
+  });
+
+  it("ignores a malformed short ASCII UpAxis property like TextParser", async () => {
+    const source = [
+      "GlobalSettings: {",
+      "\tProperties70: {",
+      '\t\tP: "UpAxis", "",2',
+      "\t}",
+      "}",
+    ].join("\n");
+    const scene = new THREE.Group();
+    scene.add(triangleMesh());
+    let loaderFactoryCalls = 0;
+    const importer = importerForScene(scene, {
+      createLoader() {
+        loaderFactoryCalls += 1;
+        return { parse: () => scene };
+      },
+    });
+    const primary = new File([source], "short-axis-property.fbx");
+
+    const imported = await importer.import(primary, [primary], options());
+
+    assert.equal(loaderFactoryCalls, 1);
+    assert.equal(scene.rotation.x, 0);
+    assert.equal(imported.root.rotation.x, 0);
+  });
+
+  it("ignores a nested shadow UpAxis outside direct Properties70 children", async () => {
+    const source = [
+      "GlobalSettings: {",
+      "\tProperties70: {",
+      "\t\tFake: {",
+      '\t\t\tP: "UpAxis", "int", "Integer", "",0',
+      "\t\t}",
+      "\t}",
+      "}",
+    ].join("\n");
+    let loaderFactoryCalls = 0;
+    const scene = new THREE.Group();
+    scene.add(triangleMesh());
+    const importer = importerForScene(scene, {
+      createLoader() {
+        loaderFactoryCalls += 1;
+        return { parse: () => scene };
+      },
+    });
+    const primary = new File([source], "shadow-axis.fbx");
+
+    await importer.import(primary, [primary], options());
+
+    assert.equal(loaderFactoryCalls, 1);
+  });
+
+  it("preflights every signature that Three recognizes as binary", async () => {
+    for (const [offset, replacement] of [
+      [21, 0x00],
+      [22, 0x01],
+    ]) {
+      const source = binaryFBX([
+        { properties: [binaryArrayProperty(), binaryArrayProperty()] },
+      ]);
+      source[offset] = replacement;
+      await assert.rejects(
+        inspectBinaryFBX(source.buffer),
+        /invalid extension bytes/u,
+      );
+
+      let factoryCalls = 0;
+      const importer = new FBXImporter({
+        binaryPreflightLimits: {
+          ...FBX_BINARY_PREFLIGHT_LIMITS,
+          maxCompressedArrays: 1,
+        },
+        createLoader() {
+          factoryCalls += 1;
+          return { parse: () => new THREE.Group() };
+        },
+        createTgaLoader(manager) {
+          factoryCalls += 1;
+          return new THREE.Loader(manager);
+        },
+      });
+      const primary = new File([source], "altered-extension.fbx");
+
+      await assert.rejects(
+        importer.import(primary, [primary], options()),
+        /invalid extension bytes/u,
       );
       assert.equal(factoryCalls, 0);
     }

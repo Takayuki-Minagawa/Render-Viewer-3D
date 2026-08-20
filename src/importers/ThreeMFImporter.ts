@@ -23,6 +23,7 @@ export const MAX_3MF_ARCHIVE_BYTES = 16 * 1024 * 1024;
 export const MAX_3MF_XML_BYTES = 8 * 1024 * 1024;
 export const MAX_3MF_XML_ELEMENTS = 100_000;
 export const MAX_3MF_XML_DEPTH = 256;
+const MAX_3MF_TRANSFORM_ATTRIBUTE_LENGTH = 512;
 
 export const THREE_MF_ZIP_LIMITS: Readonly<ZipPreflightLimits> = Object.freeze({
   maxEntries: 4_096,
@@ -42,6 +43,8 @@ const THREE_MF_UNIT_METERS = Object.freeze({
 const THREE_MF_LOADER_ROOT_RELATIONSHIP_PATTERN = /_rels\/.rels$/u;
 const THREE_MF_LOADER_MODEL_RELATIONSHIP_PATTERN =
   /3D\/_rels\/.*\.model\.rels$/u;
+const THREE_MF_TRANSFORM_NUMBER_PATTERN =
+  /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u;
 const THREE_MF_LOADER_RESOURCE_TYPES = [
   "basematerials",
   "texture2d",
@@ -361,6 +364,7 @@ function validateRootRelationships(
 }
 
 function validateThreeMFObjectGraph(model: Element): void {
+  onlyDirectDescendants(model, "metadata", "model metadata");
   const resources = requiredDirectChild(model, "resources");
   for (const resourceType of THREE_MF_LOADER_RESOURCE_TYPES) {
     onlyDirectDescendants(
@@ -368,6 +372,20 @@ function validateThreeMFObjectGraph(model: Element): void {
       resourceType,
       `${resourceType} resource`,
     );
+  }
+  for (const [resourceType, childType] of [
+    ["basematerials", "base"],
+    ["texture2dgroup", "tex2coord"],
+    ["colorgroup", "color"],
+    ["pbmetallicdisplayproperties", "pbmetallic"],
+  ] as const) {
+    for (const resource of directChildren(resources, resourceType)) {
+      onlyDirectDescendants(
+        resource,
+        childType,
+        `${childType} in ${resourceType}`,
+      );
+    }
   }
   const resourceElements = Array.from(resources.children);
   if (descendantsByLocalName(model, "texture2d").length > 0) {
@@ -442,11 +460,16 @@ function validateThreeMFObjectGraph(model: Element): void {
             "component",
             `component in object ${id}`,
           ).map(
-            (component) =>
-              positiveIntegerId(
+            (component) => {
+              validateThreeMFTransform(
+                component,
+                `3MF component in object ${id}`,
+              );
+              return positiveIntegerId(
                 component.getAttribute("objectid"),
                 `3MF component reference in object ${id}`,
-              ),
+              );
+            },
           ),
         };
     definitions.set(id, definition);
@@ -501,6 +524,7 @@ function validateThreeMFObjectGraph(model: Element): void {
   const build = requiredDirectChild(model, "build");
   let buildUsage = emptyUsage(1, 1);
   for (const item of onlyDirectDescendants(build, "item", "build item")) {
+    validateThreeMFTransform(item, "3MF build item");
     const objectId = positiveIntegerId(
       item.getAttribute("objectid"),
       "3MF build item objectid",
@@ -677,6 +701,30 @@ function optionalNonNegativeInteger(
 ): void {
   const value = element.getAttribute(attribute);
   if (value !== null) nonNegativeInteger(value, label);
+}
+
+function validateThreeMFTransform(element: Element, label: string): void {
+  const transform = element.getAttribute("transform");
+  if (transform === null) return;
+  if (transform.length > MAX_3MF_TRANSFORM_ATTRIBUTE_LENGTH) {
+    throw new Error(
+      `${label} transform exceeds the ${MAX_3MF_TRANSFORM_ATTRIBUTE_LENGTH}-character safety limit.`,
+    );
+  }
+
+  const values = transform.split(" ");
+  if (
+    values.length !== 12 ||
+    values.some(
+      (value) =>
+        !THREE_MF_TRANSFORM_NUMBER_PATTERN.test(value) ||
+        !Number.isFinite(Number(value)),
+    )
+  ) {
+    throw new Error(
+      `${label} transform must contain exactly 12 finite decimal numbers separated by single ASCII spaces.`,
+    );
+  }
 }
 
 function optionalResourceId(

@@ -69,9 +69,9 @@ function options(overrides = {}) {
 function asciiFBXWithUpAxis(axis) {
   return [
     "GlobalSettings: {",
-    "  Properties70: {",
-    `    P: "UpAxis", "int", "Integer", "",${axis}`,
-    "  }",
+    "\tProperties70: {",
+    `\t\tP: "UpAxis", "int", "Integer", "",${axis}`,
+    "\t}",
     "}",
   ].join("\n");
 }
@@ -1151,6 +1151,49 @@ describe("ColladaImporter", () => {
     assert.equal(imported.metadata.sourceUnit, "two centimeters");
   });
 
+  it("ignores case-variant and namespace-prefixed asset metadata like ColladaParser", async () => {
+    const sources = [
+      [
+        "<COLLADA>",
+        "<asset><UNIT meter=\"0.01\"/><UP_AXIS>Z_UP</UP_AXIS></asset>",
+        "</COLLADA>",
+      ].join(""),
+      [
+        "<COLLADA xmlns:c=\"urn:test\">",
+        "<asset><c:unit meter=\"0.01\"/><c:up_axis>Z_UP</c:up_axis></asset>",
+        "</COLLADA>",
+      ].join(""),
+    ];
+
+    for (const source of sources) {
+      const scene = new THREE.Scene();
+      scene.add(triangleMesh());
+      const importer = new ColladaImporter({
+        createLoader() {
+          return {
+            parse(receivedSource) {
+              assert.equal(receivedSource, source);
+              return { scene };
+            },
+          };
+        },
+      });
+      const primary = new File([source], "ignored-metadata.dae");
+
+      const imported = await importer.import(
+        primary,
+        [primary],
+        options(),
+      );
+
+      assert.equal(scene.scale.x, 1);
+      assert.equal(scene.rotation.x, 0);
+      assert.equal(imported.root.scale.x, 1);
+      assert.equal(imported.root.rotation.x, 0);
+      assert.equal(imported.metadata.sourceUnit, "meter");
+    }
+  });
+
   it("rejects non-COLLADA and malformed XML before invoking the loader", async () => {
     let factoryCalls = 0;
     let parseCalls = 0;
@@ -1165,11 +1208,17 @@ describe("ColladaImporter", () => {
         };
       },
     });
-    const primary = new File(["<not-collada/>"], "invalid-root.dae");
-    await assert.rejects(
-      importer.import(primary, [primary], options()),
-      /not well-formed COLLADA XML/u,
-    );
+    for (const source of [
+      "<not-collada/>",
+      "<collada/>",
+      '<c:COLLADA xmlns:c="urn:test"/>',
+    ]) {
+      const primary = new File([source], "invalid-root.dae");
+      await assert.rejects(
+        importer.import(primary, [primary], options()),
+        /not well-formed COLLADA XML/u,
+      );
+    }
     assert.equal(factoryCalls, 0);
     assert.equal(parseCalls, 0);
   });

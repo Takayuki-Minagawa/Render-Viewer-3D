@@ -16,7 +16,7 @@ constraint、BIM semantic情報を編集・保存することは対象外です�
 File input / Drag & Drop
           │
           ▼
-    ImportManager ─── importerRegistry（拡張子、accept、Experimental表示）
+    ImportManager ─── importerRegistry（model拡張子 / model accept、Experimental表示）
           │
           ▼
  format-specific ModelImporter
@@ -40,7 +40,10 @@ File input / Drag & Drop
 
 `ModelImporter`は`id`、表示名、拡張子、Experimental状態、`canImport`、非同期`import`を
 共通契約として持ちます。`ImportManager`は拡張子を正規化してImporterを選び、重複ID・
-重複拡張子を拒否します。ファイル選択の`accept`と対応形式一覧も同じRegistryから導出します。
+重複拡張子を拒否します。対応形式一覧とmodel-onlyの`IMPORT_FILE_ACCEPT`は同じRegistryから
+導出します。複数選択用file inputの`IMPORT_FILE_INPUT_ACCEPT`は、Registry由来のmodel拡張子へ
+sidecar用の別リスト`IMPORT_RESOURCE_EXTENSIONS`を加えて生成します。したがってsidecar拡張子は
+RegistryへImporterを追加しただけでは自動更新されません。
 
 ## 形式別の責務
 
@@ -74,7 +77,7 @@ Draco、KTX2 / Basis、Meshoptの追加decoderは現在登録していません�
 - 3MFは圧縮archive 16 MiB、4,096 entry、1 entryの展開後8 MiB、展開後合計128 MiB、
   圧縮比200:1を上限とし、ZIP64を拒否します。全entryのstreaming実展開量と宣言値の完全一致も
   `unzipSync`前に検証します。XMLはDOM構築前に100,000要素・深さ256へ制限します。
-- DAEはDOCTYPE / ENTITY、`instance_node`、過大なXML / scene構造を拒否します。3MFもDOCTYPE / ENTITYを拒否し、
+- DAEはDOM構築前に過大なXML要素数・汎用markup深さを検査し、DOCTYPE / ENTITY、`instance_node`、過大なscene構造も拒否します。3MFもDOCTYPE / ENTITYを拒否し、
   単一root `3D/*.model`だけを許可してmulti-part、model relationship part、texture resourceを拒否します。
 - PLY / FBX / DAE / 3MFの解析結果は50,000 scene node、深さ256、10,000 renderable、
   200万position vertex、200万vertex reference、200万primitiveまでです。
@@ -182,7 +185,7 @@ WASMのLGPLとOCCT例外の条件はアプリ本体のライセンスとは別�
 再配布者は独立したWASM asset、著作権・ライセンス・例外通知、対応するsourceへのアクセス、
 変更版へ置換する権利を維持してください。
 
-`linkedom` 0.18.12（ISC）は実DAE / 3MF fixture testでNode.jsへ`DOMParser`を提供するdev/test-only依存です。
+`linkedom` 0.18.12（ISC）はDAE / 3MFのimporter unit / preflight / fixture testでNode.jsへ`DOMParser`を提供するdev/test-only依存です。
 `src/`から参照せずViteのPages runtime artifactへ含まれないため、repository向け通知にはISC全文を
 記載しますが、配布物に存在しないcodeの通知となる`public/THIRD_PARTY_LICENSES.txt`には含めません。
 
@@ -190,10 +193,11 @@ WASMのLGPLとOCCT例外の条件はアプリ本体のライセンスとは別�
 
 1. browser / static hosting対応、保守状況、ライセンス、WASM配布条件を確認する。
 2. `ModelImporter`を実装し、Loader固有の出力を`THREE.Object3D`へ変換する。
-3. `importerRegistry`へ1項目追加する。UIの対応拡張子とファイル選択条件は自動更新される。
-4. 単位とup-axisが判明する場合はnormalization contextへ渡し、不明ならwarningを維持する。
-5. 解析失敗、abort、resource解放を含む小さなfixture testを追加する。
-6. runtime依存を追加した場合は、Pages artifactの第三者ライセンス通知とsource提供を更新する。
+3. `importerRegistry`へ1項目追加する。UIの対応形式とmodel-only acceptは自動更新される。
+4. sidecarを受け付ける形式では、必要な拡張子を`IMPORT_RESOURCE_EXTENSIONS`へ追加するか判断する。
+5. 単位とup-axisが判明する場合はnormalization contextへ渡し、不明ならwarningを維持する。
+6. 解析失敗、abort、resource解放を含む小さなfixture testを追加する。
+7. runtime依存を追加した場合は、Pages artifactの第三者ライセンス通知とsource提供を更新する。
 
 PLYはStable、FBX / COLLADA / 3MFはExperimentalとして独立Importer化済みです。残る候補は
 3DM、IGES / IGS、BREP / BRP、IFC、DXFなどで、次の前提設計が未完了のため後続段階で扱います。
@@ -214,8 +218,8 @@ exportを案内します。
 unit testではRegistry選択と重複防止、正規化、ローカルresource解決、GLTF / OBJ / STLの
 小さなfixtureに加え、PLYのmesh / point cloud・vertex color・Custom material除外、FBX / DAEの
 unit / axis・animation・sidecar待機・abort / error cleanup、FBX binary配列、共通geometry budget、
-3MFのZIP / XML安全上限・unit・material保持を検証します。DAE / 3MFは`linkedom`でNode.jsへ`DOMParser`を補う
-dev/test-onlyの実fixtureもThree.js addonへ通し、mockだけでなく実loaderとの接続を確認します。
+3MFのZIP / XML安全上限・unit・material保持を検証します。DAE / 3MFのimporter unit / preflight / fixture testは
+`linkedom`でNode.jsへ`DOMParser`を補い、実fixtureをThree.js addonへ通して実loaderとの接続も確認します。
 
 STEP unit testは注入したWorker clientでWorker境界・品質設定・必ず行うcleanupを検証します。
 実ブラウザでのWASM起動と実在STEPファイルの表示はbuild後のsmoke testでも確認する必要が

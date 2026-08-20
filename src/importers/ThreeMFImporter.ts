@@ -39,6 +39,18 @@ const THREE_MF_UNIT_METERS = Object.freeze({
   foot: 0.3048,
   meter: 1,
 });
+const THREE_MF_LOADER_ROOT_RELATIONSHIP_PATTERN = /_rels\/.rels$/u;
+const THREE_MF_LOADER_MODEL_RELATIONSHIP_PATTERN =
+  /3D\/_rels\/.*\.model\.rels$/u;
+const THREE_MF_LOADER_RESOURCE_TYPES = [
+  "basematerials",
+  "texture2d",
+  "colorgroup",
+  "implicitfunction",
+  "pbmetallicdisplayproperties",
+  "texture2dgroup",
+  "object",
+] as const;
 
 type ThreeMFUnitName = keyof typeof THREE_MF_UNIT_METERS;
 
@@ -350,6 +362,13 @@ function validateRootRelationships(
 
 function validateThreeMFObjectGraph(model: Element): void {
   const resources = requiredDirectChild(model, "resources");
+  for (const resourceType of THREE_MF_LOADER_RESOURCE_TYPES) {
+    onlyDirectDescendants(
+      resources,
+      resourceType,
+      `${resourceType} resource`,
+    );
+  }
   const resourceElements = Array.from(resources.children);
   if (descendantsByLocalName(model, "texture2d").length > 0) {
     throw new Error(
@@ -597,9 +616,10 @@ function onlyDirectDescendants(
 ): Element[] {
   const direct = directChildren(parent, localName);
   const all = descendantsByLocalName(parent, localName);
+  const directSet = new Set(direct);
   if (
     direct.length !== all.length ||
-    all.some((element) => !direct.includes(element))
+    all.some((element) => !directSet.has(element))
   ) {
     throw new Error(
       `Nested 3MF ${label} elements are not supported.`,
@@ -619,6 +639,10 @@ function optionalDirectChild(
 }
 
 function requiredDirectChild(parent: Element, localName: string): Element {
+  const children = onlyDirectDescendants(parent, localName, localName);
+  if (children.length > 1) {
+    throw new Error(`The 3MF model contains duplicate ${localName} elements.`);
+  }
   const child = optionalDirectChild(parent, localName);
   if (!child) throw new Error(`The 3MF model is missing ${localName}.`);
   return child;
@@ -784,6 +808,11 @@ function assertRequiredThreeMFEntries(
     (fileName) => fileName.toLowerCase() === "[content_types].xml",
   );
   const hasRelationships = normalized.includes("_rels/.rels");
+  const shadowRelationships = normalized.filter(
+    (fileName) =>
+      fileName !== "_rels/.rels" &&
+      THREE_MF_LOADER_ROOT_RELATIONSHIP_PATTERN.test(fileName),
+  );
   const modelEntries = normalized.filter((fileName) =>
     fileName.endsWith(".model"),
   );
@@ -791,8 +820,13 @@ function assertRequiredThreeMFEntries(
     /^3D\/[^/]+\.model$/u.test(fileName),
   );
   const hasModelRelationships = normalized.some((fileName) =>
-    /^3D\/_rels\/.*\.model\.rels$/u.test(fileName),
+    THREE_MF_LOADER_MODEL_RELATIONSHIP_PATTERN.test(fileName),
   );
+  if (shadowRelationships.length > 0) {
+    throw new Error(
+      "The 3MF archive contains a shadow package relationship entry that would be selected by the loader.",
+    );
+  }
   if (
     !hasContentTypes ||
     !hasRelationships ||

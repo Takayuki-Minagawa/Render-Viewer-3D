@@ -53,7 +53,7 @@ export class ImportController {
     }
     if (primaryFiles.length > 1) {
       throw new Error(
-        "Select one supported model file at a time. Additional files may be glTF sidecar resources.",
+        "Select one supported model file at a time. Additional files may be local sidecar resources referenced by that model.",
       );
     }
 

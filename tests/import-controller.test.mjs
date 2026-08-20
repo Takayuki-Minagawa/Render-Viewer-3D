@@ -107,7 +107,7 @@ describe("ImportController", () => {
         [new File(["a"], "a.foo"), new File(["b"], "b.foo")],
         defaultOptions(),
       ),
-      /one supported model file at a time/,
+      /Additional files may be local sidecar resources referenced by that model/u,
     );
   });
 

@@ -40,12 +40,6 @@ class LoadingManagerResourceTracker {
 
     manager.itemStart = (url: string): void => {
       this.pendingCount += 1;
-      if (
-        /^blob:/iu.test(url) &&
-        !resolverObjectUrls.get(manager)?.has(url)
-      ) {
-        this.loaderObjectUrls.add(url);
-      }
       this.originalItemStart.call(manager, url);
     };
     manager.itemEnd = (url: string): void => {

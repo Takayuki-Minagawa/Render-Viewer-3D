@@ -639,7 +639,7 @@ describe("FBXImporter", () => {
         createLoader(manager) {
           return {
             parse() {
-              const embeddedUrl = "blob:embedded-fbx-texture";
+              const embeddedUrl = URL.createObjectURL(new Blob(["embedded"]));
               const url = manager.resolveURL("textures/diffuse.png");
               manager.itemStart(embeddedUrl);
               manager.itemStart(url);
@@ -681,15 +681,15 @@ describe("FBXImporter", () => {
       await parseStarted.promise;
       await Promise.resolve();
       assert.equal(settled, false);
-      assert.equal(urls.created.length, 1);
+      assert.equal(urls.created.length, 2);
       assert.deepEqual(urls.revoked, []);
 
       finishSidecar();
       await importing;
       assert.equal(settled, true);
       assert.deepEqual(urls.revoked, [
-        "blob:embedded-fbx-texture",
         urls.created[0].url,
+        urls.created[1].url,
       ]);
     } finally {
       urls.restore();
@@ -1116,7 +1116,7 @@ describe("ColladaImporter", () => {
     assert.deepEqual(imported.warnings, []);
   });
 
-  it("ignores fake asset metadata inside XML comments and CDATA", async () => {
+  it("handles quoted delimiters, processing instructions, comments, and CDATA", async () => {
     const scene = new THREE.Scene();
     scene.scale.setScalar(0.02);
     scene.add(triangleMesh());
@@ -1126,9 +1126,10 @@ describe("ColladaImporter", () => {
       },
     });
     const source = [
-      "<COLLADA>",
-      "<!-- <asset><unit name=\"fake\" meter=\"9\"/><up_axis>Z_UP</up_axis></asset> -->",
-      "<![CDATA[<asset><unit meter=\"7\"/><up_axis>Z_UP</up_axis></asset>]]>",
+      "<COLLADA label=\"quoted > delimiter\">",
+      "<?inspection fake=\"quoted > delimiter\"?>",
+      "<!-- <!DOCTYPE COLLADA><asset><unit name=\"fake\" meter=\"9\"/><up_axis>Z_UP</up_axis></asset> -->",
+      "<![CDATA[<!ENTITY fake \"value\"><asset><unit meter=\"7\"/><up_axis>Z_UP</up_axis></asset>]]>",
       "<asset>",
       "<unit name=\"two centimeters\" meter=\"0.02\"/>",
       "<up_axis>Y_UP</up_axis>",
@@ -1173,6 +1174,59 @@ describe("ColladaImporter", () => {
     assert.equal(parseCalls, 0);
   });
 
+  it("rejects wide and deeply nested malformed markup before DOM construction or loader creation", async () => {
+    const parser = globalThis.DOMParser;
+    let domParserConstructions = 0;
+    let factoryCalls = 0;
+    globalThis.DOMParser = class CountingDOMParser {
+      constructor() {
+        domParserConstructions += 1;
+        this.delegate = new parser();
+      }
+
+      parseFromString(source, type) {
+        return this.delegate.parseFromString(source, type);
+      }
+    };
+    const importer = new ColladaImporter({
+      createLoader() {
+        factoryCalls += 1;
+        return { parse: () => ({ scene: new THREE.Scene() }) };
+      },
+    });
+    const fixtures = [
+      [
+        `<COLLADA>${"<extra/>".repeat(100_000)}`,
+        /element-count limit/u,
+      ],
+      [
+        [
+          "<COLLADA label=\"quoted > delimiter\">",
+          "<?inspection fake=\"<extra/>\"?>",
+          "<!-- <extra><extra/></extra> -->",
+          "<![CDATA[<extra><extra/></extra>]]>",
+          "<extra>".repeat(256),
+        ].join(""),
+        /XML markup nesting exceeds the safe depth limit/u,
+      ],
+    ];
+
+    try {
+      for (const [source, expected] of fixtures) {
+        const primary = new File([source], "lexical-budget.dae");
+        await assert.rejects(
+          importer.import(primary, [primary], options()),
+          expected,
+        );
+      }
+    } finally {
+      globalThis.DOMParser = parser;
+    }
+
+    assert.equal(domParserConstructions, 0);
+    assert.equal(factoryCalls, 0);
+  });
+
   it("rejects DTDs, instance_node expansion, and excessive node depth before parse", async () => {
     const deepNodes = [
       "<COLLADA><library_visual_scenes><visual_scene>",
@@ -1193,7 +1247,7 @@ describe("ColladaImporter", () => {
         ].join(""),
         /instance_node references are not supported/u,
       ],
-      [deepNodes, /scene node nesting exceeds the safe depth limit/u],
+      [deepNodes, /nesting exceeds the safe depth limit/u],
     ]) {
       let factoryCalls = 0;
       let parseCalls = 0;

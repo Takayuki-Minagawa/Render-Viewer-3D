@@ -1,6 +1,11 @@
 import type * as THREE from "three";
 import { BaseImporter } from "./BaseImporter";
-import { preflightBinaryFBX } from "./fbx-binary-preflight";
+import {
+  FBX_BINARY_PREFLIGHT_LIMITS,
+  inspectBinaryFBX,
+  type FBXBinaryPreflightLimits,
+  type FBXSourceCoordinateSystem,
+} from "./fbx-binary-preflight";
 import { assertRenderableGeometryBudget } from "./geometry-budget";
 import {
   disposeLoadedObject,
@@ -24,9 +29,8 @@ export interface FBXImporterDependencies {
   createTgaLoader?: (
     manager: THREE.LoadingManager,
   ) => THREE.Loader | Promise<THREE.Loader>;
+  binaryPreflightLimits?: FBXBinaryPreflightLimits;
 }
-
-type FBXSourceCoordinateSystem = "y-up" | "z-up";
 
 function unitScaleFactor(root: THREE.Group): number | undefined {
   const factor =
@@ -117,18 +121,28 @@ function undoLoaderAxisCorrection(
   // A verified ASCII Y-up declaration protects an authored root rotation.
   if (declaredAxis === "y-up") return "y-up";
 
+  if (declaredAxis === "z-up") {
+    if (hasExactLoaderAxisCorrection(root)) {
+      root.rotation.set(0, 0, 0);
+    }
+    return "z-up";
+  }
+
   // FBXLoader uses this exact synthetic wrapper rotation for Z-up assets. The
-  // strict fallback also preserves explicit overrides for binary FBX files,
-  // whose GlobalSettings record is not decoded here.
-  if (
-    root.rotation.x === -Math.PI / 2 &&
-    root.rotation.y === 0 &&
-    root.rotation.z === 0
-  ) {
+  // strict fallback retains compatibility for files without an axis record.
+  if (hasExactLoaderAxisCorrection(root)) {
     root.rotation.set(0, 0, 0);
     return "z-up";
   }
   return "y-up";
+}
+
+function hasExactLoaderAxisCorrection(root: THREE.Group): boolean {
+  return (
+    root.rotation.x === -Math.PI / 2 &&
+    root.rotation.y === 0 &&
+    root.rotation.z === 0
+  );
 }
 
 export class FBXImporter extends BaseImporter {
@@ -151,10 +165,14 @@ export class FBXImporter extends BaseImporter {
     this.assertWithinMainThreadBudget(files);
     const source = await primary.arrayBuffer();
     this.assertNotAborted(options);
-    const isBinary = await preflightBinaryFBX(source);
+    const binaryPreflight = await inspectBinaryFBX(
+      source,
+      this.dependencies.binaryPreflightLimits ??
+        FBX_BINARY_PREFLIGHT_LIMITS,
+    );
     this.assertNotAborted(options);
-    const declaredAxis = isBinary
-      ? undefined
+    const declaredAxis = binaryPreflight.isBinary
+      ? binaryPreflight.sourceCoordinateSystem
       : inspectAsciiFBXUpAxis(source);
     const resolver = new LocalResourceResolver(files, primary);
     let parsedRoot: THREE.Group | undefined;

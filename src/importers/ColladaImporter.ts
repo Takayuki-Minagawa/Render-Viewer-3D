@@ -32,6 +32,7 @@ interface PendingColladaElement {
 }
 
 const MAX_COLLADA_XML_ELEMENTS = 100_000;
+const MAX_COLLADA_XML_DEPTH = 256;
 const MAX_COLLADA_NODES = 50_000;
 const MAX_COLLADA_NODE_DEPTH = 256;
 
@@ -64,11 +65,7 @@ function optionalDirectChild(
 }
 
 function inspectColladaAsset(source: string): ColladaAssetMetadata {
-  if (/<!DOCTYPE\b|<!ENTITY\b/iu.test(source)) {
-    throw new Error(
-      "COLLADA DOCTYPE and ENTITY declarations are not supported.",
-    );
-  }
+  preflightColladaXmlStructure(source);
   const document = new DOMParser().parseFromString(source, "application/xml");
   const root = document.documentElement;
   if (
@@ -114,6 +111,105 @@ function inspectColladaAsset(source: string): ColladaAssetMetadata {
     sourceCoordinateSystem:
       rawUpAxis === "Z_UP" ? "z-up" : "y-up",
   };
+}
+
+function preflightColladaXmlStructure(source: string): void {
+  const openElements: string[] = [];
+  let cursor = 0;
+  let elementCount = 0;
+
+  while (cursor < source.length) {
+    const markupStart = source.indexOf("<", cursor);
+    if (markupStart < 0) break;
+
+    if (source.startsWith("<!--", markupStart)) {
+      cursor = findColladaMarkupEnd(source, markupStart + 4, "-->");
+      continue;
+    }
+    if (source.startsWith("<![CDATA[", markupStart)) {
+      cursor = findColladaMarkupEnd(source, markupStart + 9, "]]>");
+      continue;
+    }
+    if (source.startsWith("<?", markupStart)) {
+      cursor = findColladaMarkupEnd(source, markupStart + 2, "?>");
+      continue;
+    }
+    if (source.startsWith("<!", markupStart)) {
+      const declaration = source.slice(markupStart).match(
+        /^<!\s*(?:DOCTYPE|ENTITY)\b/iu,
+      );
+      if (declaration) {
+        throw new Error(
+          "COLLADA DOCTYPE and ENTITY declarations are not supported.",
+        );
+      }
+      throwMalformedColladaXml();
+    }
+
+    const markupEnd = findColladaTagEnd(source, markupStart + 1);
+    if (source.startsWith("</", markupStart)) {
+      const closingTag = source
+        .slice(markupStart + 2, markupEnd)
+        .trim();
+      if (!closingTag || /\s/u.test(closingTag)) throwMalformedColladaXml();
+      if (openElements.pop() !== closingTag) throwMalformedColladaXml();
+      cursor = markupEnd + 1;
+      continue;
+    }
+
+    const tagBody = source.slice(markupStart + 1, markupEnd).trimEnd();
+    const tagName = tagBody.match(/^([^\s/>]+)/u)?.[1];
+    if (!tagName) throwMalformedColladaXml();
+
+    elementCount += 1;
+    if (elementCount > MAX_COLLADA_XML_ELEMENTS) {
+      throw new Error("COLLADA XML exceeds the safe element-count limit.");
+    }
+
+    if (!tagBody.endsWith("/")) {
+      openElements.push(tagName);
+      if (openElements.length > MAX_COLLADA_XML_DEPTH) {
+        throw new Error(
+          "COLLADA XML markup nesting exceeds the safe depth limit.",
+        );
+      }
+    }
+    cursor = markupEnd + 1;
+  }
+
+  if (openElements.length > 0) throwMalformedColladaXml();
+}
+
+function findColladaMarkupEnd(
+  source: string,
+  contentStart: number,
+  terminator: string,
+): number {
+  const end = source.indexOf(terminator, contentStart);
+  if (end < 0) throwMalformedColladaXml();
+  return end + terminator.length;
+}
+
+function findColladaTagEnd(source: string, contentStart: number): number {
+  let quote: "\"" | "'" | undefined;
+  for (let index = contentStart; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === ">") return index;
+    if (character === "<") throwMalformedColladaXml();
+  }
+  throwMalformedColladaXml();
+}
+
+function throwMalformedColladaXml(): never {
+  throw new Error("COLLADA source is not well-formed COLLADA XML.");
 }
 
 function validateColladaStructure(root: Element): void {

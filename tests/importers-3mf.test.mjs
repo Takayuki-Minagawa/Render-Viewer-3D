@@ -568,6 +568,48 @@ describe("ThreeMFImporter", () => {
     assert.equal(factoryCalls, 0);
   });
 
+  it("rejects loader-shadowing relationship entries before XML parsing or addon creation", async () => {
+    let factoryCalls = 0;
+    let xmlParseCalls = 0;
+    const originalParse = DOMParser.prototype.parseFromString;
+    DOMParser.prototype.parseFromString = function (...args) {
+      xmlParseCalls += 1;
+      return originalParse.apply(this, args);
+    };
+    const importer = new ThreeMFImporter(async () => {
+      factoryCalls += 1;
+      throw new Error("must not load");
+    });
+    const fixtures = [
+      ["nested/_rels/.rels", /shadow package relationship entry/u],
+      ["evil/_rels/xrels", /shadow package relationship entry/u],
+      [
+        "evil/3D/_rels/foo.model.rels",
+        /model relationship parts are not supported/u,
+      ],
+    ];
+
+    try {
+      for (const [entryName, expected] of fixtures) {
+        const archive = createValidThreeMFArchive({
+          extraEntries: {
+            [entryName]: strToU8("<Relationships/>"),
+          },
+        });
+        const file = new File([archive], "shadow-relationship.3mf");
+        await assert.rejects(
+          importer.import(file, [file], options()),
+          expected,
+        );
+      }
+    } finally {
+      DOMParser.prototype.parseFromString = originalParse;
+    }
+
+    assert.equal(xmlParseCalls, 0);
+    assert.equal(factoryCalls, 0);
+  });
+
   it("checks abort before loading the addon", async () => {
     const controller = new AbortController();
     controller.abort(new DOMException("cancelled", "AbortError"));
@@ -665,7 +707,10 @@ describe("ThreeMFImporter", () => {
   });
 });
 
-function createValidThreeMFArchive({ includeExpansionProbe = false } = {}) {
+function createValidThreeMFArchive({
+  includeExpansionProbe = false,
+  extraEntries = {},
+} = {}) {
   const entries = {
     "[Content_Types].xml": strToU8("<Types/>"),
     "_rels/.rels": strToU8(
@@ -689,6 +734,7 @@ function createValidThreeMFArchive({ includeExpansionProbe = false } = {}) {
       ].join(""),
     ),
   };
+  Object.assign(entries, extraEntries);
   if (includeExpansionProbe) {
     entries["3D/expansion-probe.bin"] = strToU8("x".repeat(4_096));
   }

@@ -10,7 +10,7 @@ bundled locally; the application does not require an external CDN.
 | occt-wasm | `4.3.1` (exact) | STEP Worker wrapper and compiled Open CASCADE WASM | Wrapper: MIT OR Apache-2.0; compiled WASM: LGPL-2.1-only WITH OCCT-exception-1.0 | <https://github.com/andymai/occt-wasm/tree/v4.3.1> |
 | Comlink | `4.4.2` (resolved transitive runtime) | Worker RPC used by occt-wasm | Apache-2.0 | <https://github.com/GoogleChromeLabs/comlink/tree/v4.4.2> |
 | @types/three | `^0.185.4` | Development type declarations | MIT | <https://github.com/DefinitelyTyped/DefinitelyTyped> |
-| linkedom | `0.18.12` (exact) | Development/test-only DOMParser for the real DAE / 3MF fixtures | ISC | <https://github.com/WebReflection/linkedom/tree/v0.18.12> |
+| linkedom | `0.18.12` (exact) | Development/test-only DOMParser for DAE / 3MF importer unit, preflight, and fixture tests | ISC | <https://github.com/WebReflection/linkedom/tree/v0.18.12> |
 | Vite | `^6.4.3` | Development and build tool | MIT | <https://vite.dev/> |
 | TypeScript | `^5.9.3` | Development compiler | Apache-2.0 | <https://www.typescriptlang.org/> |
 
@@ -25,7 +25,7 @@ The complete GNU Lesser General Public License 2.1 text is also distributed as
 `licenses/LGPL-2.1.txt`, with the Open CASCADE exception distributed as
 `licenses/OCCT-exception-1.0.txt`.
 
-linkedom is imported only by the Node.js real-DAE / 3MF fixture tests. It is not
+linkedom is imported only by the Node.js DAE / 3MF importer unit, preflight, and fixture tests. It is not
 referenced from `src/` and is not emitted into the Vite / GitHub Pages runtime
 artifact. Its ISC notice is therefore retained in this repository-facing file
 but intentionally omitted from `public/THIRD_PARTY_LICENSES.txt`, which covers
@@ -166,8 +166,8 @@ the License. The complete Apache-2.0 text is included in
 
 ## linkedom 0.18.12 (development/test only)
 
-linkedom supplies `DOMParser` to the Node.js tests that parse real DAE and 3MF
-fixtures through the Three.js addons. It is not browser runtime code and is not
+linkedom supplies `DOMParser` to the Node.js DAE / 3MF importer unit,
+preflight, and fixture tests. It is not browser runtime code and is not
 included in the GitHub Pages artifact.
 
 Source for the exact development dependency:

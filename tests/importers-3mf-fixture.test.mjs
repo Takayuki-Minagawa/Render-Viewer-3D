@@ -247,6 +247,69 @@ describe("ThreeMFImporter browser-format fixture", () => {
       ],
       [
         createThreeMFPackageFromModel(
+          [
+            '<model unit="millimeter">',
+            '<metadata><resources><object id="constructor"/></resources></metadata>',
+            `<resources>${meshObject}</resources>`,
+            '<build><item objectid="1"/></build>',
+            "</model>",
+          ].join(""),
+        ),
+        /Nested 3MF resources elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          [
+            '<model unit="millimeter">',
+            '<metadata><build><item objectid="constructor"/></build></metadata>',
+            `<resources>${meshObject}</resources>`,
+            '<build><item objectid="1"/></build>',
+            "</model>",
+          ].join(""),
+        ),
+        /Nested 3MF build elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          modelWithObjects(
+            `<metadata><basematerials id="constructor"/></metadata>${meshObject}`,
+            "1",
+          ),
+        ),
+        /Nested 3MF basematerials resource elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          modelWithObjects(
+            [
+              '<object id="1"><mesh>',
+              '<metadata><vertices><vertex x="0" y="0" z="0"/></vertices></metadata>',
+              '<vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices>',
+              '<triangles><triangle v1="0" v2="1" v3="2"/></triangles>',
+              "</mesh></object>",
+            ].join(""),
+            "1",
+          ),
+        ),
+        /Nested 3MF vertices elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
+          modelWithObjects(
+            [
+              '<object id="1"><mesh>',
+              '<vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices>',
+              '<metadata><triangles><triangle v1="0" v2="1" v3="2"/></triangles></metadata>',
+              '<triangles><triangle v1="0" v2="1" v3="2"/></triangles>',
+              "</mesh></object>",
+            ].join(""),
+            "1",
+          ),
+        ),
+        /Nested 3MF triangles elements are not supported/u,
+      ],
+      [
+        createThreeMFPackageFromModel(
           `<!DOCTYPE model [<!ENTITY x "x">]>${modelWithObjects(meshObject, "1")}`,
         ),
         /DOCTYPE or ENTITY declaration/u,
@@ -271,6 +334,34 @@ describe("ThreeMFImporter browser-format fixture", () => {
       );
       assert.equal(factoryCalls, 0);
     }
+  });
+
+  it("keeps wide resource selector validation linear", async () => {
+    const siblings = Array.from(
+      { length: 4_000 },
+      (_, index) => `<basematerials id="${index + 2}"/>`,
+    ).join("");
+    const model = modelWithObjects(
+      [
+        siblings,
+        '<metadata><basematerials id="constructor"/></metadata>',
+        '<object id="1"><mesh><vertices/><triangles/></mesh></object>',
+      ].join(""),
+      "1",
+    );
+    let factoryCalls = 0;
+    const importer = new ThreeMFImporter(async () => {
+      factoryCalls += 1;
+      return { parse: () => new THREE.Group() };
+    });
+    const archive = createThreeMFPackageFromModel(model);
+    const primary = new File([archive], "wide-resources.3mf");
+
+    await assert.rejects(
+      importer.import(primary, [primary], importOptions()),
+      /Nested 3MF basematerials resource elements are not supported/u,
+    );
+    assert.equal(factoryCalls, 0);
   });
 });
 

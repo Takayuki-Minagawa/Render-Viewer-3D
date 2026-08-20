@@ -75,7 +75,9 @@ POV-Ray本体は組み込んでおらず、POV-Ray SDLの入出力やレンダ�
 ## 外部3D / CADデータの読み込み
 
 ViewportのImportボタン、またはドラッグ＆ドロップから読み込みます。GLB / glTFを
-推奨交換形式とし、対応拡張子とファイル選択の`accept`値はImporter Registryから生成します。
+推奨交換形式とし、対応model拡張子とmodel-onlyの`IMPORT_FILE_ACCEPT`はImporter Registryから生成します。
+複数選択用file inputの`IMPORT_FILE_INPUT_ACCEPT`は、そのmodel拡張子へsidecar用の別リスト
+`IMPORT_RESOURCE_EXTENSIONS`を加えて生成します。
 
 | 形式 | 拡張子 | Loader | 状態・主な扱い |
 | --- | --- | --- | --- |
@@ -145,7 +147,7 @@ POV-Ray概念プロファイルは自動更新されません。
 - 読み込んだThree.js assetはブラウザメモリだけに保持します。SceneModelのimport recordだけではモデルを復元できず、ページ再読み込み後は再importが必要です。
 - main threadで解析するGLB / glTF、FBX、DAE（各sidecarを含む）、OBJ、STL、PLYは、UI停止を避けるため選択ファイル合計32 MiBまでです。STEPはWorkerで解析し、入力128 MiB、出力200万頂点・200万triangleまでに制限します。
 - binary FBXはLoaderを作成する前にnode / property / depth、圧縮配列の宣言展開量とstreaming実展開量、圧縮比を検査します。
-- DAEはDOCTYPE / ENTITY、`instance_node`、過大なXML要素数・scene node数・深さをLoader作成前に拒否します。
+- DAEはDOCTYPE / ENTITY、`instance_node`、過大なXML要素数・汎用markup深さをDOM構築前、過大なscene node数・深さをLoader作成前に拒否します。
 - 3MFは圧縮archive 16 MiB、4,096 entry、1 entryの展開後8 MiB、展開後合計128 MiB、圧縮比200:1を上限とし、ZIP64を受け付けません。全entryのstreaming実展開量を測定して宣言値との完全一致も要求します。XMLはDOM構築前に100,000要素・深さ256へ制限し、DOCTYPE / ENTITYを拒否します。
 - Experimental 3MFは単一のroot `3D/*.model` partだけに対応し、multi-part、model relationship part、texture resourceを明示的に拒否します。
 - PLY / FBX / DAE / 3MFの解析結果は50,000 scene node、深さ256、10,000 renderable、200万position vertex、200万vertex reference、200万primitiveまでです。
@@ -199,8 +201,8 @@ header / 容量 / 寸法検証、非同期競合、テクスチャmappingと解�
 モデル同期に加え、Importer選択、単位・座標・原点の正規化、glTF sidecar解決、
 FBX / DAE sidecar待機・解放、PLY mesh / point cloud、FBX / DAEの単位・軸・animation、
 FBX binary配列と3MFのZIP / XML preflight、DAE / 3MFの実fixture、共通geometry budget、OBJ / STL / STEP変換、
-import record、runtime assetの再利用・破棄、マテリアル切替、Camera Auto Fitを検証します。実DAE / 3MF fixtureでは
-Node.jsに`DOMParser`を提供するdev/test-only依存としてlinkedomを使用します。
+import record、runtime assetの再利用・破棄、マテリアル切替、Camera Auto Fitを検証します。DAE / 3MFの
+importer unit / preflight / fixture testでは、Node.jsに`DOMParser`を提供するdev/test-only依存としてlinkedomを使用します。
 `npm run build` はprebuildでTypeScriptの型検査を実行後、`dist/`へ静的ファイルを生成します。
 GitHub Pagesのプロジェクトパスに合わせ、Viteの`base`は`/Render-Viewer-3D/`です。
 

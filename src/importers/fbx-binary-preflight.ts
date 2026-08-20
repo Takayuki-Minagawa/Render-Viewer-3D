@@ -11,6 +11,7 @@ export interface FBXBinaryPreflightLimits {
   readonly maxDepth: number;
   readonly maxPropertiesPerNode: number;
   readonly maxTotalProperties: number;
+  readonly maxCompressedArrays?: number;
   readonly maxArrayCompressedBytes: number;
   readonly maxArrayExpandedBytes: number;
   readonly maxTotalArrayExpandedBytes: number;
@@ -23,6 +24,7 @@ export const FBX_BINARY_PREFLIGHT_LIMITS: Readonly<FBXBinaryPreflightLimits> =
     maxDepth: 256,
     maxPropertiesPerNode: 100_000,
     maxTotalProperties: 1_000_000,
+    maxCompressedArrays: 4_096,
     maxArrayCompressedBytes: 32 * 1024 * 1024,
     maxArrayExpandedBytes: 64 * 1024 * 1024,
     maxTotalArrayExpandedBytes: 128 * 1024 * 1024,
@@ -33,7 +35,27 @@ interface ParseFrame {
   readonly endOffset: number;
   readonly nextDepth: number;
   readonly topLevel: boolean;
+  readonly parentContext: BinaryNodeContext;
 }
+
+type BinaryNodeContext =
+  | "root"
+  | "global-settings"
+  | "properties70"
+  | "other";
+
+type ClassifiedNodeContext =
+  | BinaryNodeContext
+  | "properties70-property";
+
+export type FBXSourceCoordinateSystem = "y-up" | "z-up";
+
+export type FBXBinaryPreflightResult =
+  | { readonly isBinary: false }
+  | {
+      readonly isBinary: true;
+      readonly sourceCoordinateSystem?: FBXSourceCoordinateSystem;
+    };
 
 interface CompressedArrayPayload {
   readonly offset: number;
@@ -47,6 +69,7 @@ interface PreflightState {
   nodeCount: number;
   propertyCount: number;
   totalArrayExpandedBytes: number;
+  declaredUpAxis?: FBXSourceCoordinateSystem;
   readonly compressedArrays: CompressedArrayPayload[];
 }
 
@@ -58,9 +81,20 @@ export async function preflightBinaryFBX(
   source: ArrayBuffer,
   limits: FBXBinaryPreflightLimits = FBX_BINARY_PREFLIGHT_LIMITS,
 ): Promise<boolean> {
+  return (await inspectBinaryFBX(source, limits)).isBinary;
+}
+
+/**
+ * Validates a binary FBX and extracts its declared up axis without invoking
+ * FBXLoader. ASCII input is reported without attempting to parse its text.
+ */
+export async function inspectBinaryFBX(
+  source: ArrayBuffer,
+  limits: FBXBinaryPreflightLimits = FBX_BINARY_PREFLIGHT_LIMITS,
+): Promise<FBXBinaryPreflightResult> {
   validateLimits(limits);
   const bytes = new Uint8Array(source);
-  if (!hasBinaryMagic(bytes)) return false;
+  if (!hasBinaryMagic(bytes)) return { isBinary: false };
   if (bytes.byteLength < FBX_CONTENT_OFFSET) {
     throw new Error("The binary FBX header is truncated.");
   }
@@ -84,6 +118,7 @@ export async function preflightBinaryFBX(
       endOffset: bytes.byteLength,
       nextDepth: 1,
       topLevel: true,
+      parentContext: "root",
     },
   ];
   let offset = FBX_CONTENT_OFFSET;
@@ -99,7 +134,10 @@ export async function preflightBinaryFBX(
         state.compressedArrays,
         limits,
       );
-      return true;
+      return {
+        isBinary: true,
+        sourceCoordinateSystem: state.declaredUpAxis,
+      };
     }
     if (offset >= frame.endOffset) {
       throw new Error(
@@ -180,10 +218,16 @@ export async function preflightBinaryFBX(
       throw new Error("A binary FBX node end offset is out of bounds.");
     }
     assertSpan(offset, nameLength, endOffset, "node name");
+    const nodeContext = classifyNodeContext(
+      frame.parentContext,
+      bytes,
+      offset,
+      nameLength,
+    );
     offset += nameLength;
     assertSpan(offset, propertyListBytes, endOffset, "property list");
     const propertyEnd = offset + propertyListBytes;
-    offset = inspectProperties(
+    const inspected = inspectProperties(
       bytes,
       view,
       offset,
@@ -191,7 +235,12 @@ export async function preflightBinaryFBX(
       propertyCount,
       state,
       limits,
+      nodeContext === "properties70-property",
     );
+    offset = inspected.offset;
+    if (inspected.upAxis !== undefined) {
+      recordDeclaredUpAxis(state, inspected.upAxis);
+    }
     if (offset !== propertyEnd) {
       throw new Error(
         "A binary FBX property-list length is inconsistent with its properties.",
@@ -203,11 +252,78 @@ export async function preflightBinaryFBX(
         endOffset,
         nextDepth: frame.nextDepth + 1,
         topLevel: false,
+        parentContext:
+          nodeContext === "properties70-property"
+            ? "other"
+            : nodeContext,
       });
     }
   }
 
   throw new Error("The binary FBX node stream is malformed.");
+}
+
+function classifyNodeContext(
+  parentContext: BinaryNodeContext,
+  bytes: Uint8Array,
+  offset: number,
+  length: number,
+): ClassifiedNodeContext {
+  if (
+    parentContext === "root" &&
+    equalsAscii(bytes, offset, length, "GlobalSettings")
+  ) {
+    return "global-settings";
+  }
+  if (
+    parentContext === "global-settings" &&
+    equalsAscii(bytes, offset, length, "Properties70")
+  ) {
+    return "properties70";
+  }
+  if (
+    parentContext === "properties70" &&
+    equalsAscii(bytes, offset, length, "P")
+  ) {
+    return "properties70-property";
+  }
+  return "other";
+}
+
+function equalsAscii(
+  bytes: Uint8Array,
+  offset: number,
+  length: number,
+  expected: string,
+): boolean {
+  if (length !== expected.length) return false;
+  for (let index = 0; index < length; index += 1) {
+    if (bytes[offset + index] !== expected.charCodeAt(index)) return false;
+  }
+  return true;
+}
+
+function recordDeclaredUpAxis(
+  state: PreflightState,
+  value: number,
+): void {
+  if (value === 0) {
+    throw new Error(
+      "Unsupported FBX UpAxis value: 0. Convert the file to Y-up or Z-up before importing.",
+    );
+  }
+  if (value !== 1 && value !== 2) {
+    throw new Error(`Invalid binary FBX UpAxis value: ${value}.`);
+  }
+
+  const declared = value === 1 ? "y-up" : "z-up";
+  if (state.declaredUpAxis === declared) {
+    throw new Error("The binary FBX contains duplicate UpAxis declarations.");
+  }
+  if (state.declaredUpAxis !== undefined) {
+    throw new Error("The binary FBX contains conflicting UpAxis declarations.");
+  }
+  state.declaredUpAxis = declared;
 }
 
 function inspectProperties(
@@ -218,8 +334,11 @@ function inspectProperties(
   propertyCount: number,
   state: PreflightState,
   limits: FBXBinaryPreflightLimits,
-): number {
+  inspectUpAxis: boolean,
+): { readonly offset: number; readonly upAxis?: number } {
   let offset = start;
+  let isUpAxisDeclaration = false;
+  let upAxis: number | undefined;
   for (let index = 0; index < propertyCount; index += 1) {
     assertSpan(offset, 1, end, "property type");
     const type = String.fromCharCode(bytes[offset]);
@@ -227,24 +346,46 @@ function inspectProperties(
 
     switch (type) {
       case "Y":
+        if (isUpAxisDeclaration && index === 4) {
+          upAxis = view.getInt16(offset, true);
+        }
         offset = advance(offset, 2, end, "16-bit property");
         break;
       case "C":
         offset = advance(offset, 1, end, "Boolean property");
         break;
       case "F":
+        offset = advance(offset, 4, end, "32-bit property");
+        break;
       case "I":
+        if (isUpAxisDeclaration && index === 4) {
+          upAxis = view.getInt32(offset, true);
+        }
         offset = advance(offset, 4, end, "32-bit property");
         break;
       case "D":
+        offset = advance(offset, 8, end, "64-bit property");
+        break;
       case "L":
+        if (isUpAxisDeclaration && index === 4) {
+          upAxis = readSafeInt64(view, offset, "UpAxis value");
+        }
         offset = advance(offset, 8, end, "64-bit property");
         break;
       case "R":
       case "S": {
         assertSpan(offset, 4, end, "length-prefixed property");
         const length = view.getUint32(offset, true);
-        offset = advance(offset + 4, length, end, "length-prefixed property");
+        const valueOffset = offset + 4;
+        offset = advance(valueOffset, length, end, "length-prefixed property");
+        if (type === "S" && inspectUpAxis && index === 0) {
+          isUpAxisDeclaration = equalsAscii(
+            bytes,
+            valueOffset,
+            length,
+            "UpAxis",
+          );
+        }
         break;
       }
       case "b":
@@ -265,8 +406,28 @@ function inspectProperties(
       default:
         throw new Error(`Unsupported binary FBX property type: ${type}.`);
     }
+
+    if (
+      isUpAxisDeclaration &&
+      index === 4 &&
+      type !== "Y" &&
+      type !== "I" &&
+      type !== "L"
+    ) {
+      throw new Error(
+        "The binary FBX contains an invalid UpAxis declaration.",
+      );
+    }
   }
-  return offset;
+  if (isUpAxisDeclaration && upAxis === undefined) {
+    throw new Error(
+      "The binary FBX contains an incomplete UpAxis declaration.",
+    );
+  }
+  return {
+    offset,
+    ...(upAxis === undefined ? {} : { upAxis }),
+  };
 }
 
 function inspectArrayProperty(
@@ -340,6 +501,14 @@ function inspectArrayProperty(
     "array property payload",
   );
   if (encoding === 1) {
+    const maxCompressedArrays =
+      limits.maxCompressedArrays ??
+      FBX_BINARY_PREFLIGHT_LIMITS.maxCompressedArrays!;
+    if (state.compressedArrays.length >= maxCompressedArrays) {
+      throw new Error(
+        `The binary FBX contains more than ${maxCompressedArrays} compressed arrays; the safety limit was exceeded.`,
+      );
+    }
     state.compressedArrays.push({
       offset: payloadOffset,
       compressedBytes,
@@ -455,6 +624,23 @@ function readSafeUint64(
 ): number {
   const value = view.getBigUint64(offset, true);
   if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `The binary FBX ${label} is not safely representable.`,
+    );
+  }
+  return Number(value);
+}
+
+function readSafeInt64(
+  view: DataView,
+  offset: number,
+  label: string,
+): number {
+  const value = view.getBigInt64(offset, true);
+  if (
+    value < BigInt(Number.MIN_SAFE_INTEGER) ||
+    value > BigInt(Number.MAX_SAFE_INTEGER)
+  ) {
     throw new Error(
       `The binary FBX ${label} is not safely representable.`,
     );

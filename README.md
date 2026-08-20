@@ -60,11 +60,12 @@ POV-Ray本体は組み込んでおらず、POV-Ray SDLの入出力やレンダ�
 
 ### Phase 4（拡張可能な3D / CADモデル読み込み）
 
-- GLB / glTF、OBJ、STL、および実験的なSTEP / STPの読み込み
+- GLB / glTF、OBJ、STL、PLY、および実験的なSTEP / STP、FBX、DAE、3MFの読み込み
 - 拡張子からImporterを選択するRegistry / ImportManager構成
 - Importボタン、複数ファイル選択、およびViewportへのドラッグ＆ドロップ
 - 単位、座標系、中央寄せ、接地、STEP tessellation品質の読み込みオプション
-- `.gltf`から参照するローカルbuffer・画像を、同時選択したsidecarファイルから解決
+- `.gltf`、FBX、DAEから参照するローカルbuffer・画像を、同時選択したsidecarファイルから解決
+- PLY / FBX / DAE / 3MFのThree.js addonを形式別のdynamic chunkとして必要時だけ読み込み
 - 読み込み後のObject Tree、メタデータ、警告、およびroot単位の選択・表示・Transform・削除
 - 読み込み元のマテリアルとアプリの共有マテリアルを切り替えるImported / Customモード
 - 読み込みマテリアルのPBR scalar / colorを共有MaterialDefinitionへ変換し、Custom候補として登録
@@ -74,19 +75,31 @@ POV-Ray本体は組み込んでおらず、POV-Ray SDLの入出力やレンダ�
 ## 外部3D / CADデータの読み込み
 
 ViewportのImportボタン、またはドラッグ＆ドロップから読み込みます。GLB / glTFを
-推奨交換形式とし、対応拡張子とファイル選択の`accept`値はImporter Registryから生成します。
+推奨交換形式とし、対応model拡張子とmodel-onlyの`IMPORT_FILE_ACCEPT`はImporter Registryから生成します。
+複数選択用file inputの`IMPORT_FILE_INPUT_ACCEPT`は、そのmodel拡張子へsidecar用の別リスト
+`IMPORT_RESOURCE_EXTENSIONS`を加えて生成します。
 
 | 形式 | 拡張子 | Loader | 状態・主な扱い |
 | --- | --- | --- | --- |
 | glTF / GLB | `.gltf`, `.glb` | Three.js `GLTFLoader` | 推奨。階層・mesh・標準glTFマテリアルを保持します。ローカルsidecarは本体と同時に選択します。 |
 | Wavefront OBJ | `.obj` | Three.js `OBJLoader` | Geometry中心。`mtllib`参照は警告し、現在はfallbackマテリアルで表示します。 |
 | STL | `.stl` | Three.js `STLLoader` | Geometry中心。light gray、roughness 0.6、metallic 0の既定マテリアルを割り当てます。 |
+| PLY | `.ply` | Three.js `PLYLoader` | Stable。faceがあるデータはmesh、faceのないデータはpoint cloudとして読み込み、vertex colorを保持します。 |
+| Autodesk FBX | `.fbx` | Three.js `FBXLoader` | Experimental。階層・マテリアル・animationとローカルtexture sidecarを保持し、binary配列を事前検査して`UnitScaleFactor`とup-axisを一度だけ正規化します。 |
+| COLLADA / DAE | `.dae` | Three.js `ColladaLoader` | Experimental。文書の`unit` / `up_axis`を事前検査して一度だけ正規化し、階層・マテリアル・animationとローカルsidecarを保持します。 |
+| 3MF | `.3mf` | Three.js `3MFLoader` | Experimental。単一root model partのunit、mesh、マテリアルを読み込みます。 |
 | STEP / STP | `.step`, `.stp` | `occt-wasm` 4.3.1 | Experimental。Worker内でB-Repを三角形meshへ変換します。 |
 
 アプリ内部の長さはmeter、上方向はY-upです。AutoではglTFをmeter / Y-up、STEPを
-millimeterとして扱います。単位または座標系を検出できない形式はmeter / Y-upとして扱い、
-Inspectorへ警告を表示します。Center ModelとPlace on Groundは読み込み時のBounding Boxを
-使用します。Low / Medium / High品質はSTEP tessellationの細かさを変更します。
+millimeterとして扱います。FBXは宣言された`UnitScaleFactor`（centimeter / file unit）と
+Loaderのaxis補正を共通正規化へ戻して一度だけ適用し、factorがなければmeterを仮定して警告します。
+DAEは文書の`unit`とY_UP / Z_UPを読み、Loaderの補正を共通正規化へ戻して一度だけ適用します
+（X_UPは未対応です）。3MFはroot modelの`unit`（micron / millimeter / centimeter / inch / foot / meter）を
+読み、Autoへ渡してZ-upからY-upへ一度だけ変換します。package検査が完了できない場合だけmillimeterを仮定し、
+警告を表示します。単位または座標系を検出できないOBJ / STL / PLYは
+meter / Y-upとして扱い、Inspectorへ警告を表示します。Center ModelとPlace on Groundは
+読み込み時のBounding Boxを使用します。Low / Medium / High品質はSTEP tessellationの
+細かさを変更します。
 
 Object Treeには読み込んだ階層を表示しますが、現段階の選択、Transform、表示切替、
 マテリアル上書きは読み込んだモデルのroot単位です。Importedモードへ戻すと、読み込み時の
@@ -123,14 +136,21 @@ POV-Ray概念プロファイルは自動更新されません。
 - Three.js/WebGLによる表示であり、POV-Rayとのピクセル互換性はありません。
 - シーンのファイル保存・復元には未対応のため、ページを再読み込みすると編集内容は初期状態に戻ります。
 - ライト編集、AO、PNG出力、JSON入出力、比較機能は未実装です。
-- 対応形式はGLB / glTF、OBJ、STL、STEP / STPです。PLY、FBX、DAE、3MF、3DM、IGES、BREP、IFC、DXFなどは未実装です。
+- 対応形式はGLB / glTF、OBJ、STL、PLY、STEP / STP、FBX、DAE、3MFです。
+- 3DM、IGES / IGS、BREP / BRP、IFC、DXFは未実装です。3DM / IGES / BREPはbrowser対応CAD parser、Worker境界、階層・属性保持の評価が必要で、現在の`occt-wasm` buildはIGESを含みません。IFCは大規模BIMのsemantic・階層、DXFは2D line・block・textをsceneへ対応付ける設計が先に必要なため、後続段階で扱います。
 - OBJのMTLマテリアルは未対応です。
 - Draco、KTX2 / Basis、Meshoptなど、追加decoderを必要とするglTF圧縮・texture形式は未対応です。
 - STEPはExperimentalです。現在のWorker tessellation経路ではassembly階層、名称、色、元マテリアルを単一meshへflattenし、警告を表示します。
 - 読み込み階層は表示用です。子node単位の選択・Transform・表示切替・マテリアル変更には未対応です。
-- glTF animationはruntimeへ読み込みますが、再生UIはありません。
+- PLY point cloudとFBX lineは選択・表示・Transformできますが、Custom PBRマテリアルの上書き対象外で、読み込み時の`PointsMaterial` / line materialを維持します。
+- glTF / FBX / DAE animationはruntimeへ読み込みますが、再生UIはありません。
 - 読み込んだThree.js assetはブラウザメモリだけに保持します。SceneModelのimport recordだけではモデルを復元できず、ページ再読み込み後は再importが必要です。
-- main threadで解析するGLB / glTF（sidecarを含む）、OBJ、STLは、UI停止を避けるため選択ファイル合計32 MiBまでです。STEPはWorkerで解析し、入力128 MiB、出力200万頂点・200万triangleまでに制限します。
+- main threadで解析するGLB / glTF、FBX、DAE（各sidecarを含む）、OBJ、STL、PLYは、UI停止を避けるため選択ファイル合計32 MiBまでです。STEPはWorkerで解析し、入力128 MiB、出力200万頂点・200万triangleまでに制限します。
+- binary FBXはLoaderを作成する前にnode / property / depth、圧縮配列の宣言展開量とstreaming実展開量、圧縮比を検査します。
+- DAEはDOCTYPE / ENTITY、過大なXML要素数・汎用markup深さをDOM構築前に拒否し、`instance_node`参照と過大なscene node数・深さをLoader作成前に拒否します。
+- 3MFは圧縮archive 16 MiB、4,096 entry、1 entryの展開後8 MiB、展開後合計128 MiB、圧縮比200:1を上限とし、ZIP64を受け付けません。全entryのstreaming実展開量を測定して宣言値との完全一致も要求します。XMLはDOM構築前に100,000要素・深さ256へ制限し、DOCTYPE / ENTITYを拒否します。
+- Experimental 3MFは単一のroot `3D/*.model` partだけに対応し、multi-part、model relationship part、texture resourceを明示的に拒否します。
+- PLY / FBX / DAE / 3MFの解析結果は50,000 scene node、深さ256、10,000 renderable、200万position vertex、200万vertex reference、200万primitiveまでです。
 - 大規模モデル向けのLOD、mesh簡略化、永続cache、streaming importは未実装です。
 
 ## 表示と言語の設定
@@ -144,7 +164,7 @@ POV-Ray概念プロファイルは自動更新されません。
 - 選択したモデル本体、ローカルsidecar、およびマテリアル画像はブラウザのメモリ内で処理し、アプリから外部サーバーへアップロードしません。
 - `localStorage`は表示言語とテーマの保存にだけ使用します。
 - Analytics、Cookie、外部API、外部CDNは使用していません。
-- `.gltf`内のHTTP(S)など外部resource URIは読み込みを拒否します。参照resourceはローカルファイルとして本体と同時に選択してください。
+- `.gltf`、FBX、DAE内のHTTP(S)など外部resource URIは読み込みを拒否します。参照resourceはローカルファイルとして本体と同時に選択してください。
 - 対応状況一覧の公式資料リンクを利用者が開いた場合に限り、ブラウザがリンク先のPOV-Ray公式サイトへアクセスします。シーンデータは送信しません。
 
 ## ローカル実行
@@ -179,8 +199,10 @@ npm run preview
 Three.js材質への投影、共有リソースの再利用・破棄、IORのプレビュー制限、ローカル画像の
 header / 容量 / 寸法検証、非同期競合、テクスチャmappingと解放、TransformControls操作中の
 モデル同期に加え、Importer選択、単位・座標・原点の正規化、glTF sidecar解決、
-OBJ / STL / STEP変換、import record、runtime assetの再利用・破棄、マテリアル切替、
-Camera Auto Fitを検証します。
+FBX / DAE sidecar待機・解放、PLY mesh / point cloud、FBX / DAEの単位・軸・animation、
+FBX binary配列と3MFのZIP / XML preflight、DAE / 3MFの実fixture、共通geometry budget、OBJ / STL / STEP変換、
+import record、runtime assetの再利用・破棄、マテリアル切替、Camera Auto Fitを検証します。DAE / 3MFの
+importer unit / preflight / fixture testでは、Node.jsに`DOMParser`を提供するdev/test-only依存としてlinkedomを使用します。
 `npm run build` はprebuildでTypeScriptの型検査を実行後、`dist/`へ静的ファイルを生成します。
 GitHub Pagesのプロジェクトパスに合わせ、Viteの`base`は`/Render-Viewer-3D/`です。
 
@@ -231,7 +253,7 @@ Persistence of Vision Raytracer Pty. Ltd.の商標です。
 Publicリポジトリとして閲覧できますが、オープンソースとしての利用許諾を示すものではありません。
 
 利用ライブラリのライセンスは [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md) を参照してください。
-GitHub Pagesの配布物には、実行時に使用するThree.js、occt-wasm、Comlink、および
-Open CASCADE WebAssemblyの通知を`THIRD_PARTY_LICENSES.txt`として同梱し、
-LGPL-2.1全文を`licenses/LGPL-2.1.txt`、OCCT例外全文を
-`licenses/OCCT-exception-1.0.txt`として配布します。
+GitHub Pagesの配布物には、実行時に使用するThree.js、Three.js addon内のfflate、
+occt-wasm、Comlink、およびOpen CASCADE WebAssemblyの通知を
+`THIRD_PARTY_LICENSES.txt`として同梱し、LGPL-2.1全文を
+`licenses/LGPL-2.1.txt`、OCCT例外全文を`licenses/OCCT-exception-1.0.txt`として配布します。

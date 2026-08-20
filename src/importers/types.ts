@@ -41,6 +41,7 @@ export interface ModelMetadata {
   triangleCount?: number;
   materialCount?: number;
   unit?: string;
+  sourceUnit?: string;
 }
 
 export interface ImportedModel {

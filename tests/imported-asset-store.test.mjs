@@ -213,6 +213,50 @@ describe("ImportedAssetStore", () => {
     );
     store.dispose();
   });
+
+  it("owns imported lights and disposes each light and shadow target once", () => {
+    const store = new ImportedAssetStore();
+    const root = new THREE.Group();
+    const light = new THREE.DirectionalLight();
+    const shadowMap = new THREE.WebGLRenderTarget(1, 1);
+    light.shadow.map = shadowMap;
+    root.add(light);
+    const lightDisposal = trackLightDisposal(light);
+    const shadowDisposal = trackDisposal(shadowMap);
+
+    store.register("asset-light", root);
+    assert.equal(store.delete("asset-light"), true);
+    assert.equal(store.delete("asset-light"), false);
+    store.dispose();
+
+    assert.equal(lightDisposal.count, 1);
+    assert.equal(shadowDisposal.count, 1);
+  });
+
+  it("rejects shadow resources shared across imported assets", () => {
+    const store = new ImportedAssetStore();
+    const sharedShadowMap = new THREE.WebGLRenderTarget(1, 1);
+    const firstLight = new THREE.DirectionalLight();
+    const secondLight = new THREE.DirectionalLight();
+    firstLight.shadow.map = sharedShadowMap;
+    secondLight.shadow.map = sharedShadowMap;
+    const firstRoot = new THREE.Group().add(firstLight);
+    const secondRoot = new THREE.Group().add(secondLight);
+    const firstLightDisposal = trackLightDisposal(firstLight);
+    const secondLightDisposal = trackLightDisposal(secondLight);
+    const shadowDisposal = trackDisposal(sharedShadowMap);
+
+    store.register("asset-light-1", firstRoot);
+    assert.throws(
+      () => store.register("asset-light-2", secondRoot),
+      /must not share .* resources/,
+    );
+    store.dispose();
+
+    assert.equal(firstLightDisposal.count, 1);
+    assert.equal(secondLightDisposal.count, 0);
+    assert.equal(shadowDisposal.count, 1);
+  });
 });
 
 function trackDisposal(resource) {
@@ -227,6 +271,16 @@ function trackSkeletonDisposal(skeleton) {
   const tracker = { count: 0 };
   const originalDispose = skeleton.dispose.bind(skeleton);
   skeleton.dispose = () => {
+    tracker.count += 1;
+    originalDispose();
+  };
+  return tracker;
+}
+
+function trackLightDisposal(light) {
+  const tracker = { count: 0 };
+  const originalDispose = light.dispose.bind(light);
+  light.dispose = () => {
     tracker.count += 1;
     originalDispose();
   };

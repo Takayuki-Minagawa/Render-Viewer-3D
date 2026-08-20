@@ -1,5 +1,5 @@
 import {
-  IMPORT_FILE_ACCEPT,
+  IMPORT_FILE_INPUT_ACCEPT,
   importerRegistry,
   type ImportOptions,
 } from "../importers";
@@ -257,7 +257,7 @@ export class AppShell {
     this.#manualDialog = this.#query("[data-manual-dialog]");
     this.#loadingElement = this.#query("[data-loading]");
     this.#statusText = this.#query("[data-status]");
-    this.#importFileInput.accept = IMPORT_FILE_ACCEPT;
+    this.#importFileInput.accept = IMPORT_FILE_INPUT_ACCEPT;
     this.#editorView = new SceneEditorView(this.#root);
     this.#materialLibrary = new MaterialLibraryView(this.#root);
     this.#applyPreferences();
@@ -1170,7 +1170,7 @@ export class AppShell {
           </aside>
         </main>
 
-        <input class="visually-hidden" data-import-file-input type="file" accept="${IMPORT_FILE_ACCEPT}" multiple tabindex="-1">
+        <input class="visually-hidden" data-import-file-input type="file" accept="${IMPORT_FILE_INPUT_ACCEPT}" multiple tabindex="-1">
         <dialog class="import-dialog" data-import-dialog aria-labelledby="import-dialog-title">
           <form method="dialog" class="import-dialog-card" data-import-options-form>
             <div class="import-dialog-header"><div><span class="eyebrow" data-i18n="import.eyebrow">3D / CAD FILES</span><h2 id="import-dialog-title" data-i18n="import.title">Import model</h2></div><button class="dialog-close" type="submit" value="cancel" data-i18n-aria-label="import.cancelLabel">×</button></div>
@@ -1189,7 +1189,7 @@ export class AppShell {
               <label><input type="radio" name="import-quality" value="medium" checked><span data-i18n="import.qualityMedium">Medium</span></label>
               <label><input type="radio" name="import-quality" value="high"><span data-i18n="import.qualityHigh">High</span></label>
             </fieldset>
-            <div class="import-dialog-note"><strong data-i18n="import.sidecarsTitle">Sidecar files</strong><span data-i18n="import.sidecarsBody">For glTF, select related .bin and image files together.</span></div>
+            <div class="import-dialog-note"><strong data-i18n="import.sidecarsTitle">Sidecar files</strong><span data-i18n="import.sidecarsBody">For glTF, select referenced .bin and image files with the model; for FBX and COLLADA / DAE, also select referenced image files.</span></div>
             <div class="import-dialog-actions"><button class="secondary-action" type="submit" value="cancel" data-i18n="import.cancel">Cancel</button><button class="primary-action" type="button" data-action="choose-import-files"><span data-i18n="import.chooseFiles">Choose files</span></button></div>
           </form>
         </dialog>

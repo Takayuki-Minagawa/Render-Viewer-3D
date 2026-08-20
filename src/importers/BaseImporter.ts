@@ -77,7 +77,12 @@ export abstract class BaseImporter implements ModelImporter {
     normalizeImportedRoot(root, options, warnings, context);
     return {
       root,
-      metadata: createModelMetadata(primary.name, format, root),
+      metadata: createModelMetadata(
+        primary.name,
+        format,
+        root,
+        context.sourceUnitLabel ?? context.sourceUnit,
+      ),
       warnings,
     };
   }

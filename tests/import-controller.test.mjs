@@ -36,6 +36,7 @@ describe("ImportController", () => {
           triangleCount: 1,
           materialCount: 1,
           unit: "meter",
+          sourceUnit: "centimeter",
         },
         warnings: [{ code: "fixture", message: "Fixture warning." }],
       }),
@@ -76,6 +77,7 @@ describe("ImportController", () => {
     assert.equal(model.hierarchy[0].name, "Assembly");
     assert.equal(model.hierarchy[0].children[0].triangleCount, 1);
     assert.equal(model.metadata.sizeBytes, 7);
+    assert.equal(model.metadata.sourceUnit, "centimeter");
   });
 
   it("rejects ambiguous primary files and delegates unsupported errors", async () => {
@@ -105,7 +107,7 @@ describe("ImportController", () => {
         [new File(["a"], "a.foo"), new File(["b"], "b.foo")],
         defaultOptions(),
       ),
-      /one supported model file at a time/,
+      /Additional files may be local sidecar resources referenced by that model/u,
     );
   });
 

@@ -6,6 +6,7 @@ let createImportOptions;
 let createImporterDisplayItems;
 let hasDraggedFiles;
 let importErrorDetail;
+let importerRegistry;
 let server;
 
 before(async () => {
@@ -20,6 +21,9 @@ before(async () => {
     hasDraggedFiles,
     importErrorDetail,
   } = await server.ssrLoadModule("/src/ui/import-ui-state.ts"));
+  ({ importerRegistry } = await server.ssrLoadModule(
+    "/src/importers/registry.ts",
+  ));
 });
 
 after(async () => {
@@ -89,5 +93,23 @@ describe("import UI state", () => {
     );
     assert.equal(importErrorDetail(new Error(" broken ")), "broken");
     assert.equal(importErrorDetail("failed"), "failed");
+  });
+
+  it("shows registry model formats and marks experimental importers", () => {
+    const items = createImporterDisplayItems(importerRegistry);
+
+    assert.deepEqual(
+      items.map(({ id }) => id),
+      ["gltf", "obj", "stl", "ply", "fbx", "collada", "3mf", "step"],
+    );
+    assert.deepEqual(
+      items.filter(({ experimental }) => experimental).map(({ id }) => id),
+      ["fbx", "collada", "3mf", "step"],
+    );
+    assert.equal(
+      items.find(({ id }) => id === "collada")?.label,
+      "COLLADA / DAE (.dae)",
+    );
+    assert.equal(items.some(({ label }) => label.includes(".bin")), false);
   });
 });

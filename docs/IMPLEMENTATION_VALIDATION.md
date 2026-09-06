@@ -81,7 +81,7 @@
 - clean install後の並列SSR試験でVite依存最適化の待機が発生したため、単体試験ではブラウザ用prebundleを無効化し、runnerに60秒上限を追加。devのComlink prebundleは維持しました。
 - WebKitのIndexedDB Blob保存失敗を実ブラウザで再現し、該当する互換エラーだけArrayBuffer recordへ再保存する処理を追加。旧Blob読込とquota等のエラー表示を維持し、単体5件とWebKitの保存・再起動・復旧試験で確認しました。
 
-## 最終一括検証・公開（追記欄）
+## 最終一括検証・公開の追跡
 
 | 項目 | 状態 |
 | --- | --- |
@@ -95,8 +95,8 @@
 | 公開用buildの3ブラウザ検証 | **15件成功**、約59.9秒。`RV3D_PREVIEW=1`、3ブラウザ各5件 |
 | 複合project復元、画像差替えUndo、resource反復 | Draco／Meshopt＋KTX2／STEPを混在保存・復元。別のprojectで4種PBR画像＋STEP、HDR＋露出＋lightを復元。color画像差替えUndoと6回のdrop→削除→Undo→Redo→履歴解放で、warm-up後のgeometry／texture件数が増加しないことを確認 |
 | 独立reviewの指摘修正・再review | 3サブエージェントによる担当外reviewと修正後の再reviewを実施。指摘を修正し、追加のマージ阻害指摘なし |
-| PR・merge commit | 未作成／未記録 |
-| GitHub Pages最終公開 | 未実行／未記録 |
+| PR・merge commit | [PR #8](https://github.com/Takayuki-Minagawa/Render-Viewer-3D/pull/8)。マージ前確認でMERGEABLE／CLEAN、PR用Actions実行0件。マージcommitはPRの履歴で確認可能 |
+| GitHub Pages最終公開 | [公開workflowの履歴](https://github.com/Takayuki-Minagawa/Render-Viewer-3D/actions/workflows/deploy.yml)／[公開サイト](https://takayuki-minagawa.github.io/Render-Viewer-3D/)。この文書を含むPRのmerge後に1回実行し、結果はworkflowの記録を正とする |
 
 検証workflowは手動起動だけに変更し、PR更新ごとのActionsは使用しません。最後のmainへのmergeに伴うPages公開workflowを使用します。
 

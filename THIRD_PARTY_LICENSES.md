@@ -188,3 +188,23 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
 OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+
+## Additional runtime dependencies (editor extensions)
+
+Immer 11.1.18 — Copyright (c) 2017 Michel Weststrate — MIT.
+Full notice: licenses/Immer-LICENSE.txt
+
+Draco (bundled by Three.js r185) — Google Draco project — Apache-2.0.
+https://github.com/google/draco
+Full terms: licenses/Draco-LICENSE.txt
+
+Basis Universal transcoder (bundled by Three.js r185) — Binomial LLC — Apache-2.0.
+https://github.com/BinomialLLC/basis_universal
+Full terms: licenses/Basis-Universal-LICENSE.txt
+
+Meshoptimizer 1.1 decoder (bundled by Three.js r185) — Copyright (c) 2016-2026 Arseny Kapoulkine — MIT.
+https://github.com/zeux/meshoptimizer
+Full notice: licenses/Meshoptimizer-LICENSE.txt
+
+@playwright/test is a development-only Apache-2.0 dependency. Its browser binaries and test fixtures are not included in the Pages artifact. Fixture attribution is in tests/fixtures/compressed/README.md.

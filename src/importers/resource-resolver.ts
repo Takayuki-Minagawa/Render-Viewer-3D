@@ -88,6 +88,18 @@ export class LocalResourceResolver {
       return url;
     }
 
+    const file = this.resolveFile(url);
+    const existingUrl = this.objectUrls.get(file);
+    if (existingUrl) return existingUrl;
+    const objectUrl = URL.createObjectURL(file);
+    registerLocalResourceObjectUrl(this.manager, objectUrl);
+    this.objectUrls.set(file, objectUrl);
+    return objectUrl;
+  }
+
+  /** Resolves a sidecar without creating an Object URL or allowing network access. */
+  resolveFile(url: string): File {
+    const canonicalUrl = url.replaceAll("\\", "/");
     const decodedPath = decodePath(stripQueryAndFragment(canonicalUrl));
     if (isExternalResource(decodedPath)) {
       this.unresolved.add(url);
@@ -126,15 +138,7 @@ export class LocalResourceResolver {
       );
     }
 
-    const existingUrl = this.objectUrls.get(file);
-    if (existingUrl) {
-      return existingUrl;
-    }
-
-    const objectUrl = URL.createObjectURL(file);
-    registerLocalResourceObjectUrl(this.manager, objectUrl);
-    this.objectUrls.set(file, objectUrl);
-    return objectUrl;
+    return file;
   }
 
   dispose(): void {

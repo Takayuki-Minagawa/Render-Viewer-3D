@@ -1,5 +1,7 @@
+import { assertRenderableGeometryBudget } from "./geometry-budget";
+import { disposeLoadedObject } from "./loader-resource-wait";
 import * as THREE from "three";
-import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { parseSTL } from "./stl-parser";
 import { BaseImporter } from "./BaseImporter";
 import type { ImportedModel, ImportOptions } from "./types";
 
@@ -21,7 +23,7 @@ export class STLImporter extends BaseImporter {
     const data = await primary.arrayBuffer();
     this.assertNotAborted(options);
 
-    const geometry = new STLLoader().parse(data);
+    const geometry = await parseSTL(data, options.signal);
     if (geometry.getAttribute("normal") === undefined) {
       geometry.computeVertexNormals();
     }
@@ -35,6 +37,12 @@ export class STLImporter extends BaseImporter {
     mesh.name = primary.name;
 
     const root = this.createRoot(primary, mesh);
-    return this.finishImport(primary, "STL", root, options);
+    try {
+      assertRenderableGeometryBudget(root, "STL");
+      return this.finishImport(primary, "STL", root, options);
+    } catch (error) {
+      disposeLoadedObject(root);
+      throw error;
+    }
   }
 }

@@ -12,7 +12,7 @@ instead of being silently ignored.
 | --- | --- |
 | Direct | The live preview has a closely corresponding Three.js control. This does not imply identical pixels or POV-Ray semantics. |
 | Approximate | The concept is represented using a physically based WebGL approximation. |
-| Stored only | The SceneModel can retain the structure or value, but the viewport does not render the effect. This status does not mean that the scene is persisted to a file or browser storage. |
+| Stored only | The SceneModel can retain the structure or value, but the viewport does not render the effect. This is a rendering classification. The values can also be retained in the dedicated `.rv3d` project and IndexedDB autosave. |
 
 The in-app list is authoritative only for the release-specific classifications
 implemented by this project. It is not an exhaustive statement about all
@@ -75,12 +75,28 @@ preview-only `MaterialColorMapModel`; it is intentionally separate from
 POV-Ray `PovImageMapModel`, whose source string and mapping options remain
 stored-only metadata and are never fetched by the application.
 
-Local image bytes are session-only. SceneModel stores an asset identifier,
-source metadata, dimensions, and mapping values, but never a browser `File` or
-`Blob`, object URL, decoded bitmap, or Three.js GPU resource. The runtime image
-store validates and owns those objects and releases them explicitly. HDRI,
-normal and bump maps, procedural image projection, persistent browser-file
-storage, and imported meshes without usable UV coordinates remain unsupported.
+The preview also supports local tangent-space normal, roughness, metalness,
+and ambient-occlusion image maps through `material.maps`. These are WebGL PBR
+controls, separate from the POV-Ray `normal`, `finish`, and image-projection
+concepts. Base color uses sRGB; data maps use no color-space conversion.
+Roughness reads green, metalness blue, and AO red. Bump maps and procedural
+image projection remain unsupported. Meshes without usable UV coordinates
+fall back to scalar/base-color materials.
+
+SceneModel stores asset identifiers, source metadata, dimensions, and mapping
+values, never a browser `File`, `Blob`, object URL, decoded bitmap, or GPU
+resource. Runtime stores validate and own the images/textures; current-scene
+and Undo/Redo references determine their lifetime. The `.rv3d` container and
+IndexedDB autosave separately include original image bytes, allowing restore
+without reselecting each image. Image limits are 16 MiB per file, 4096 pixels
+per side, roughly 16 megapixels, and a 256 MiB estimated image-store budget.
+
+Ambient/directional light controls, exposure, and a local Radiance RGBE HDR
+environment affect the WebGL preview. HDR input is limited to 32 MiB, 8192
+pixels per side, and 8 megapixels; EXR is not supported. These controls do not
+implement POV-Ray lighting transport. The dedicated project retains the HDR
+bytes and scene descriptors. PNG captures the viewport, while GLB exports
+supported standard geometry/material/animation; neither is a POV-Ray SDL export.
 
 ## Reference baseline
 

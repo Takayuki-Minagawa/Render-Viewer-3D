@@ -1,7 +1,9 @@
-import { cloneAndFreeze, freezeDeep } from "../model/immutable";
+import { produce } from "immer";
+import { cloneAndFreeze } from "../model/immutable";
 import type { SceneModel, SceneSnapshot } from "../model/scene-model";
 
-export type SceneListener = (model: SceneSnapshot) => void;
+export interface SceneChange { history?: boolean; }
+export type SceneListener = (model: SceneSnapshot, change: SceneChange) => void;
 
 export class SceneStore {
   readonly #listeners = new Set<SceneListener>();
@@ -15,16 +17,21 @@ export class SceneStore {
     return this.#model;
   }
 
-  update(recipe: (draft: SceneModel) => void): void {
-    const nextModel = structuredClone(this.#model) as SceneModel;
-    recipe(nextModel);
-    this.#model = freezeDeep(nextModel);
-    for (const listener of this.#listeners) listener(this.#model);
+  update(recipe: (draft: SceneModel) => void, change: SceneChange = {}): void {
+    const nextModel = produce(this.#model as SceneModel, (draft) => { recipe(draft); });
+    if (nextModel === this.#model) return;
+    this.#model = nextModel;
+    for (const listener of this.#listeners) listener(this.#model, change);
+  }
+
+  replace(model: SceneModel | SceneSnapshot, change: SceneChange = { history: false }): void {
+    this.#model = cloneAndFreeze(model) as SceneSnapshot;
+    for (const listener of this.#listeners) listener(this.#model, change);
   }
 
   subscribe(listener: SceneListener): () => void {
     this.#listeners.add(listener);
-    listener(this.#model);
+    listener(this.#model, { history: false });
     return () => this.#listeners.delete(listener);
   }
 }

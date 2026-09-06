@@ -1,0 +1,86 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Render Viewer 3D test fixture"
+  },
+  "extensionsUsed": [
+    "EXT_meshopt_compression"
+  ],
+  "extensionsRequired": [
+    "EXT_meshopt_compression"
+  ],
+  "buffers": [
+    {
+      "byteLength": 67,
+      "uri": "data:application/octet-stream;base64,oAAAATwAAAD//wE8AAAAfn0AAAEMAAAA/wEMAAAAfgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    },
+    {
+      "byteLength": 36,
+      "extensions": {
+        "EXT_meshopt_compression": {
+          "fallback": true
+        }
+      }
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 1,
+      "byteOffset": 0,
+      "byteLength": 36,
+      "extensions": {
+        "EXT_meshopt_compression": {
+          "buffer": 0,
+          "byteOffset": 0,
+          "byteLength": 67,
+          "byteStride": 12,
+          "count": 3,
+          "mode": "ATTRIBUTES",
+          "filter": "NONE"
+        }
+      }
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [
+        0,
+        0,
+        0
+      ],
+      "max": [
+        1,
+        1,
+        0
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0
+          }
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0
+    }
+  ],
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "scene": 0
+}

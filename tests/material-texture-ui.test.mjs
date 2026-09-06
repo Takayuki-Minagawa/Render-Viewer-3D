@@ -43,6 +43,8 @@ before(async () => {
       "../src/ui/scene-editor-view.ts",
     ].map((path) => readFile(new URL(path, import.meta.url), "utf8")),
   );
+  libraryViewSource += await readFile(new URL("../src/ui/material-detail-view.ts", import.meta.url), "utf8");
+  sceneEditorSource += await readFile(new URL("../src/ui/imported-inspector.ts", import.meta.url), "utf8");
 });
 
 after(async () => {
@@ -271,8 +273,8 @@ describe("imported custom material library route", () => {
   it("opens the selected custom material through the shared library action", () => {
     const importedSection = sliceBetween(
       sceneEditorSource,
-      "\n  #createImportedMaterialSection(\n",
-      "\n  #createImportedActionSection(\n",
+      "\n  createImportedMaterialSection(\n",
+      "\n  createImportedActionSection(\n",
     );
     const source = compact(importedSection);
     assert.match(

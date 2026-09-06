@@ -174,7 +174,7 @@ describe("import UI lifecycle", () => {
 describe("import hierarchy accessibility", () => {
   it("does not expose child proxy buttons as independently pressed", async () => {
     const source = await readFile(
-      new URL("../src/ui/scene-editor-view.ts", import.meta.url),
+      new URL("../src/ui/scene-tree-view.ts", import.meta.url),
       "utf8",
     );
     assert.doesNotMatch(

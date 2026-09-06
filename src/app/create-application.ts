@@ -6,6 +6,7 @@ import {
   setImportedSceneMaterialMode,
   setImportedSceneVisibility,
   updateImportedSceneTransform,
+  setImportedNodeVisibility, setImportedNodeMaterial, isolateImportedNode, resetImportedNodeOverrides,
 } from "../model/imported-scene-model";
 import {
   addMaterial,
@@ -37,6 +38,13 @@ import { EditorStore } from "./editor-store";
 import { ImportController } from "./import-controller";
 import { MaterialTextureController } from "./material-texture-controller";
 import { SceneStore } from "./scene-store";
+import { ProjectAssets } from "./project-assets";
+import { SceneHistory } from "./scene-history";
+import { ProjectController } from "./project-controller";
+import { ImportedNodeTools } from "../ui/imported-node-tools";
+import { AppearanceTools } from "../ui/appearance-tools";
+import { MaterialPbrMapController } from "./material-pbr-map-controller";
+import { MaterialMapTools } from "../ui/material-map-tools";
 
 export interface Application {
   dispose: () => void;
@@ -51,22 +59,31 @@ export function createApplication(root: HTMLElement): Application {
   });
   const importedAssets = new ImportedAssetStore();
   const materialImages = new MaterialImageAssetStore();
+  const projectAssets = new ProjectAssets();
+  const history = new SceneHistory(store, importedAssets, materialImages, projectAssets);
   const importManager = new ImportManager();
   const importAbortController = new AbortController();
   const shell = new AppShell(root);
+  let nodeTools: ImportedNodeTools | undefined;
 
   try {
     const adapter = new SceneAdapter(shell.viewportElement, store.getSnapshot(), {
       importedAssets,
       materialImages,
-      onCameraInteractionEnd: ({ position, target, near, far }) => {
+      onCameraInteractionEnd: ({ position, target, near, far, projection, orthographicHeight, up }) => {
         store.update((draft) => {
           draft.camera.position = position;
           draft.camera.target = target;
           draft.camera.near = near;
           draft.camera.far = far;
-        });
+          draft.camera.projection = projection;
+          if (orthographicHeight === undefined) delete draft.camera.orthographicHeight;
+          else draft.camera.orthographicHeight = orthographicHeight;
+          draft.camera.up = up;
+        }, { history: false });
       },
+      onShadowsChanged: (enabled) => store.update(draft => { draft.shadowsEnabled = enabled; }),
+      onImportedNodeSelected: (importId, nodeId) => nodeTools?.selectNode(importId, nodeId),
       onObjectSelected: (objectId) => {
         editorStore.setSelectedObjectId(objectId);
       },
@@ -89,7 +106,46 @@ export function createApplication(root: HTMLElement): Application {
       store,
       editorStore,
       adapter,
+      (assetId, primary, files, options) => projectAssets.capture(assetId, primary, files, options),
     );
+    let environmentGeneration = 0;
+    let environmentTarget: string | null = null;
+    let disposed = false;
+    const prepareEnvironment = async (file: File | null, assetId: string | null) => {
+      const texture = file ? await adapter.prepareEnvironment(file) : null;
+      if (disposed) { texture?.dispose(); throw new Error("Application disposed."); }
+      let committed = false;
+      return { commit() { committed = true; environmentTarget = assetId; environmentGeneration++; adapter.setEnvironment(texture); }, dispose() { if (!committed) texture?.dispose(); } };
+    };
+    const projects = new ProjectController(root, store, editorStore, importManager, importedAssets, materialImages, projectAssets, history, prepareEnvironment);
+    const pbrMaps = new MaterialPbrMapController(store, materialImages);
+    const mapTools = new MaterialMapTools(root.querySelector<HTMLElement>(".inspector-panel") ?? shell.viewportElement, store, pbrMaps, operation => projects.editAsync(operation));
+    const appearance = new AppearanceTools(shell.viewportElement, store, {
+      onEnvironmentFile: (file) => projects.editAsync(async () => {
+        const id = file ? `environment-${crypto.randomUUID()}` : null;
+        const prepared = await prepareEnvironment(file, id);
+        if (file && id) projectAssets.environments.set(id, file);
+        try { prepared.commit(); store.update(draft => { draft.environment = file && id ? { assetId: id, name: file.name } : null; }); }
+        finally { prepared.dispose(); }
+      }),
+    });
+    nodeTools = new ImportedNodeTools(root.querySelector<HTMLElement>(".scene-panel") ?? root.querySelector<HTMLElement>(".inspector-panel") ?? shell.viewportElement, {
+      selectObject: id => editorStore.setSelectedObjectId(id),
+      visibility: (id, node, visible) => store.update(d => { setImportedNodeVisibility(d.imports, id, node, visible); }),
+      material: (id, node, material) => store.update(d => { if (material === null || d.materials.some(m => m.id === material)) setImportedNodeMaterial(d.imports, id, node, material); }),
+      isolate: (id, node) => store.update(d => { isolateImportedNode(d.imports, id, node); }),
+      reset: id => store.update(d => { resetImportedNodeOverrides(d.imports, id); }),
+    });
+    const applyLocale = () => {
+      const locale = document.documentElement.lang === "en" ? "en" : "ja";
+      adapter.setLocale(locale); projects.setLocale(locale);
+      appearance.setLocale(locale);
+      mapTools.setLocale(locale);
+      nodeTools?.update(store.getSnapshot(), editorStore.getSnapshot().selectedObjectId, locale);
+    };
+    const localeObserver = new MutationObserver(applyLocale);
+    localeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+    applyLocale();
     shell.refreshPreferences();
 
     let currentEditorState = editorStore.getSnapshot();
@@ -108,15 +164,31 @@ export function createApplication(root: HTMLElement): Application {
       }
       adapter.applyModel(model);
       shell.update(model, currentEditorState);
+      nodeTools?.update(model, currentEditorState.selectedObjectId);
+      const environmentId = model.environment?.assetId ?? null;
+      if (environmentId !== environmentTarget) {
+        environmentTarget = environmentId;
+        const generation = ++environmentGeneration;
+        const file = environmentId ? projectAssets.environments.get(environmentId) : undefined;
+        void (file ? adapter.prepareEnvironment(file) : Promise.resolve(null)).then(texture => {
+          if (disposed || generation !== environmentGeneration) texture?.dispose();
+          else adapter.setEnvironment(texture);
+        }).catch(error => projects.toolbar.status("error", String(error)));
+      }
     });
     const unsubscribeEditor = editorStore.subscribe((editorState) => {
       currentEditorState = editorState;
       adapter.setSelection(editorState.selectedObjectId);
       adapter.setTransformMode(editorState.transformMode);
       shell.updateEditorState(editorState);
+      nodeTools?.update(store.getSnapshot(), editorState.selectedObjectId);
     });
 
     shell.bindActions({
+      beginEdit: () => history.begin(),
+      endEdit: () => history.end(),
+      cancelEdit: () => history.cancel(),
+      selectImportedNode: (importId, nodeId) => nodeTools?.selectNode(importId, nodeId),
       toggleGrid: () => {
         store.update((draft) => {
           draft.helpers.gridVisible = !draft.helpers.gridVisible;
@@ -132,16 +204,18 @@ export function createApplication(root: HTMLElement): Application {
         const defaultCamera = createDefaultSceneModel().camera;
         store.update((draft) => {
           draft.camera = defaultCamera;
-        });
+        }, { history: false });
       },
       importFiles: async (files, options) => {
-        await importController.importFiles(files, {
+        const started = performance.now();
+        await projects.editAsync(() => importController.importFiles(files, {
           ...options,
           signal: importAbortController.signal,
-        });
+        }));
+        adapter.setImportDuration(performance.now() - started);
       },
       attachMaterialColorMap: async (materialId, file) => {
-        await materialTextures.attach(materialId, file);
+        await projects.editAsync(() => materialTextures.attach(materialId, file));
       },
       updateMaterialColorMap: (materialId, field, value) => {
         materialTextures.update(materialId, field, value);
@@ -294,8 +368,20 @@ export function createApplication(root: HTMLElement): Application {
     });
 
     shell.setReady();
+    if (import.meta.env.DEV) {
+      Object.assign(window, { __viewer: { store, adapter, projects, history, importedAssets, materialImages, projectAssets, editorStore } });
+    }
     return {
       dispose: () => {
+        disposed = true;
+        environmentGeneration++;
+        appearance.dispose();
+        mapTools.dispose();
+        pbrMaps.dispose();
+        nodeTools?.dispose();
+        localeObserver.disconnect();
+        projects.dispose();
+        history.dispose();
         importAbortController.abort();
         materialTextures.dispose();
         unsubscribeEditor();

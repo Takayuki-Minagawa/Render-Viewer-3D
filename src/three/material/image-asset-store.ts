@@ -45,6 +45,7 @@ export interface DecodedMaterialImage {
 
 export type MaterialImageDecoder = (
   file: Blob,
+  numericData?: boolean,
 ) => Promise<DecodedMaterialImage>;
 
 export interface MaterialImageHeader {
@@ -55,6 +56,7 @@ export interface MaterialImageHeader {
 }
 
 interface MaterialImageAssetRecord {
+  readonly file: File;
   readonly descriptor: MaterialColorMapModel;
   readonly image: DecodedMaterialImage;
   readonly source: THREE.Source<DecodedMaterialImage>;
@@ -70,6 +72,8 @@ export interface MaterialImageAssetLease {
 }
 
 export class MaterialImageAssetStore {
+  #retained = new Set<string>();
+  readonly #deferredDeletes = new Set<string>();
   readonly #assets = new Map<string, MaterialImageAssetRecord>();
   readonly #decoder: MaterialImageDecoder;
   readonly #maxResidentBytes: number;
@@ -99,7 +103,7 @@ export class MaterialImageAssetStore {
     );
   }
 
-  async importFile(file: File): Promise<MaterialColorMapModel> {
+  async importFile(file: File, numericData = false): Promise<MaterialColorMapModel> {
     this.#assertActive();
     let inspectionBytes = 0;
     let image: DecodedMaterialImage | undefined;
@@ -118,7 +122,7 @@ export class MaterialImageAssetStore {
       const estimate = estimateResidentBytes(header.width, header.height);
       this.#reserve(estimate.total);
       reservedBytes = estimate.total;
-      image = await this.#decode(file);
+      image = await this.#decode(file, numericData);
       this.#assertDecodedDimensions(image);
       if (this.#disposed) {
         throw new MaterialTextureLoadError(
@@ -154,6 +158,7 @@ export class MaterialImageAssetStore {
       reservedBytes = 0;
       this.#residentBytes += actualEstimate.total;
       this.#assets.set(assetId, {
+        file,
         descriptor,
         image,
         source,
@@ -203,6 +208,8 @@ export class MaterialImageAssetStore {
   }
 
   delete(assetId: string): boolean {
+    if (this.#retained.has(assetId)) { this.#deferredDeletes.add(assetId); return false; }
+    this.#deferredDeletes.delete(assetId);
     const record = this.#assets.get(assetId);
     if (!record) return false;
     if (record.leases > 0) {
@@ -221,6 +228,18 @@ export class MaterialImageAssetStore {
     return [...this.#assets.keys()];
   }
 
+  sourceFile(assetId: string): File | undefined { return this.#assets.get(assetId)?.file; }
+
+  estimatedBytes(assetId: string): number {
+    const record = this.#assets.get(assetId);
+    return record ? record.cpuBytes + record.gpuBytes + record.file.size : 0;
+  }
+
+  setRetainedIds(ids: ReadonlySet<string>): void {
+    this.#retained = new Set(ids);
+    for (const id of this.#deferredDeletes) if (!this.#retained.has(id)) this.delete(id);
+  }
+
   get residentBytes(): number {
     return this.#residentBytes + this.#reservedBytes;
   }
@@ -236,9 +255,9 @@ export class MaterialImageAssetStore {
     this.#residentBytes = 0;
   }
 
-  async #decode(file: File): Promise<DecodedMaterialImage> {
+  async #decode(file: File, numericData: boolean): Promise<DecodedMaterialImage> {
     try {
-      return await this.#decoder(file);
+      return await this.#decoder(file, numericData);
     } catch (error) {
       if (error instanceof MaterialTextureLoadError) throw error;
       throw new MaterialTextureLoadError(
@@ -388,6 +407,7 @@ export function inspectMaterialImageHeader(
 
 async function decodeWithImageBitmap(
   file: Blob,
+  numericData = false,
 ): Promise<DecodedMaterialImage> {
   if (typeof createImageBitmap !== "function") {
     throw new MaterialTextureLoadError(
@@ -398,7 +418,7 @@ async function decodeWithImageBitmap(
   return createImageBitmap(file, {
     imageOrientation: "flipY",
     premultiplyAlpha: "none",
-    colorSpaceConversion: "default",
+    colorSpaceConversion: numericData ? "none" : "default",
   });
 }
 

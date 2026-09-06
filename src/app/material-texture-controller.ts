@@ -146,8 +146,8 @@ export class MaterialTextureController {
     const activeIds = new Set(
       this.#sceneStore
         .getSnapshot()
-        .materials.flatMap(({ colorMap }) =>
-          colorMap ? [colorMap.assetId] : [],
+        .materials.flatMap(({ colorMap, maps }) =>
+          [...(colorMap ? [colorMap.assetId] : []), ...Object.values(maps ?? {}).flatMap((map) => map ? [map.assetId] : [])],
         ),
     );
     for (const assetId of this.#assets.ids()) {
@@ -194,7 +194,7 @@ export class MaterialTextureController {
   #isAssetReferenced(assetId: string): boolean {
     return this.#sceneStore
       .getSnapshot()
-      .materials.some(({ colorMap }) => colorMap?.assetId === assetId);
+      .materials.some(({ colorMap, maps }) => colorMap?.assetId === assetId || Object.values(maps ?? {}).some((map) => map?.assetId === assetId));
   }
 
   #requireMaterial(materialId: string): void {

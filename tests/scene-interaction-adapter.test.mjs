@@ -147,6 +147,25 @@ describe("SceneInteractionAdapter transform transactions", () => {
   });
 });
 
+it("Escape cancels a gizmo drag and pointerup does not commit or change selection", () => {
+  const harness = createHarness();
+  const initial = structuredClone(harness.objects[0].transform);
+  harness.canvas.dispatchEvent(pointerEvent("pointerdown"));
+  harness.controls.beginDrag();
+  harness.controls.changeObject(object => { object.position.x = 123; object.scale.y = 2; });
+  const escape = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
+  harness.canvas.dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(harness.controls.dragging, false);
+  assert.equal(harness.orbitControls.enabled, true);
+  harness.canvas.dispatchEvent(pointerEvent("pointerup"));
+  assert.equal(harness.commits.length, 0);
+  assert.equal(harness.graph.getObjectById(harness.objects[0].id).position.x, initial.position.x);
+  assert.equal(harness.graph.getObjectById(harness.objects[0].id).scale.y, initial.scale.y);
+  assert.deepEqual(harness.objects[0].transform, initial);
+  disposeHarness(harness);
+});
+
 class FakeCanvas extends EventTarget {
   getBoundingClientRect() {
     return {

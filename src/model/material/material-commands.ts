@@ -223,7 +223,7 @@ export function getMaterialUsageCount(
   );
   return scene.imports.reduce(
     (count, imported) =>
-      count + Number(imported.customMaterialId === materialId),
+      count + Number(imported.customMaterialId === materialId) + Object.values(imported.nodeOverrides ?? {}).filter(override => override.materialId === materialId).length,
     objectUsage,
   );
 }
@@ -238,9 +238,10 @@ export function getMaterialUsageCounts(
     counts.set(object.materialId, (counts.get(object.materialId) ?? 0) + 1);
   }
   for (const imported of scene.imports) {
-    const materialId = imported.customMaterialId;
-    if (!materialId) continue;
-    counts.set(materialId, (counts.get(materialId) ?? 0) + 1);
+    const ids = [imported.customMaterialId, ...Object.values(imported.nodeOverrides ?? {}).map(override => override.materialId)];
+    for (const materialId of ids) {
+      if (materialId) counts.set(materialId, (counts.get(materialId) ?? 0) + 1);
+    }
   }
   return counts;
 }

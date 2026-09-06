@@ -1,0 +1,34 @@
+import { test, expect } from '@playwright/test';
+
+test('part selection, material override and isolation participate in Undo and language changes', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('./');
+  const obj = 'o PartA\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\no PartB\nv 2 0 0\nv 3 0 0\nv 2 1 0\nf 4 5 6\n';
+  await page.locator('[data-import-file-input]').setInputFiles({ name: 'parts.obj', mimeType: 'text/plain', buffer: Buffer.from(obj) });
+  await expect(page.locator('.imported-node-tools')).toBeVisible();
+  const part = page.locator('[data-imported-node-select]').filter({ hasText: 'PartB' });
+  await part.click();
+  await expect(part).toHaveAttribute('aria-current', 'true');
+  const chosen = await part.getAttribute('data-imported-node-select');
+  await expect(page.locator('[data-node-tool=node]')).toHaveValue(chosen!);
+  const material = page.locator('[data-node-tool=material]');
+  const id = await material.locator('option').nth(1).getAttribute('value');
+  await material.selectOption(id!);
+  await page.locator('[data-project-action=undo]').click();
+  await expect(material).toHaveValue('');
+  await page.locator('[data-project-action=redo]').click();
+  await expect(material).toHaveValue(id!);
+  await page.locator('[data-node-tool=isolate]').click();
+  await expect(page.locator('[data-node-tool=show-all]')).toBeEnabled();
+  await page.locator('[data-project-action=undo]').click();
+  await expect(page.locator('[data-node-tool=show-all]')).toBeDisabled();
+  await page.locator('[data-action=language]').click();
+  await expect(page.locator('.imported-node-tools summary')).toHaveText('Imported model parts');
+  await page.locator('.viewport-tools summary').click();
+  await page.locator('[data-vt=projection]').selectOption('orthographic');
+  await expect(page.locator('[data-view-projection]')).toHaveText('Orthographic');
+  await expect(page.locator('[data-view-fov]')).toContainText('m');
+  await page.locator('[data-action=language]').click();
+  await expect(page.locator('[data-view-projection]')).toHaveText('正投影');
+  expect(errors).toEqual([]);
+});

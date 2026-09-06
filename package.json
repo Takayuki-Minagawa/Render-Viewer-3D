@@ -14,21 +14,25 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test tests/camera-fit.test.mjs tests/editor-store.test.mjs tests/geometry-factory.test.mjs tests/import-controller.test.mjs tests/import-ui-state.test.mjs tests/imported-asset-store.test.mjs tests/imported-material-adapter.test.mjs tests/imported-scene-adapter.test.mjs tests/imported-scene-model.test.mjs tests/importers-core.test.mjs tests/importers-ply.test.mjs tests/importers-exchange-formats.test.mjs tests/importers-fbx-runtime-boundaries.test.mjs tests/importers-dae-fixture.test.mjs tests/importers-fbx-fixture.test.mjs tests/importers-3mf.test.mjs tests/importers-3mf-fixture.test.mjs tests/importers-geometry-budget.test.mjs tests/importers-formats.test.mjs tests/importers-step.test.mjs tests/material-basic-editor.test.mjs tests/material-capability-ui.test.mjs tests/material-color-map.test.mjs tests/material-detail-state.test.mjs tests/material-image-asset-store.test.mjs tests/material-library-ui.test.mjs tests/material-model.test.mjs tests/material-runtime.test.mjs tests/material-texture-controller.test.mjs tests/material-texture-runtime.test.mjs tests/material-texture-ui.test.mjs tests/refactoring.test.mjs tests/scene-editor-view-cache.test.mjs tests/scene-interaction-adapter.test.mjs tests/scene-object-commands.test.mjs tests/ui-settings.test.mjs",
+    "test": "node scripts/test.mjs",
     "prebuild": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
   },
   "engines": {
     "node": "^18.0.0 || ^20.0.0 || >=22.0.0"
   },
   "dependencies": {
     "comlink": "4.4.2",
+    "immer": "^11.1.18",
     "occt-wasm": "4.3.1",
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.1",
     "@types/three": "^0.185.4",
     "linkedom": "0.18.12",
     "typescript": "^5.9.3",

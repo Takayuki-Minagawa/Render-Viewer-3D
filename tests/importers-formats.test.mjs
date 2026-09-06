@@ -187,9 +187,8 @@ describe("GLTFImporter", () => {
 });
 
 describe("OBJImporter", () => {
-  it("loads geometry and reports unsupported MTL references", async () => {
+  it("loads OBJ geometry with fallback materials when no MTL is declared", async () => {
     const source = [
-      "mtllib fixture.mtl",
       "o Triangle",
       "v 0 0 0",
       "v 1 0 0",
@@ -216,7 +215,6 @@ describe("OBJImporter", () => {
     assert.deepEqual(
       imported.warnings.map(({ code }) => code),
       [
-        "obj-material-library-ignored",
         "unit-unavailable",
         "coordinate-system-unavailable",
       ],

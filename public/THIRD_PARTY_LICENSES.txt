@@ -328,3 +328,21 @@ https://github.com/GoogleChromeLabs/comlink/tree/v4.4.2
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+
+## Additional runtime dependencies (editor extensions)
+
+Immer 11.1.18 — Copyright (c) 2017 Michel Weststrate — MIT.
+Full notice: licenses/Immer-LICENSE.txt
+
+Draco (bundled by Three.js r185) — Google Draco project — Apache-2.0.
+https://github.com/google/draco
+Full terms: licenses/Draco-LICENSE.txt
+
+Basis Universal transcoder (bundled by Three.js r185) — Binomial LLC — Apache-2.0.
+https://github.com/BinomialLLC/basis_universal
+Full terms: licenses/Basis-Universal-LICENSE.txt
+
+Meshoptimizer 1.1 decoder (bundled by Three.js r185) — Copyright (c) 2016-2026 Arseny Kapoulkine — MIT.
+https://github.com/zeux/meshoptimizer
+Full notice: licenses/Meshoptimizer-LICENSE.txt

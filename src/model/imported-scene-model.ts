@@ -32,6 +32,12 @@ export interface ImportedSceneWarning {
   message: string;
 }
 
+/** Overrides use stable child-index paths from the saved import hierarchy. */
+export interface ImportedNodeOverride {
+  visible?: boolean;
+  materialId?: string;
+}
+
 export interface ImportedSceneModel {
   id: string;
   assetId: string;
@@ -44,6 +50,8 @@ export interface ImportedSceneModel {
   metadata: ImportedSceneMetadata;
   warnings: ImportedSceneWarning[];
   hierarchy: ImportedNodeModel[];
+  nodeOverrides?: Record<string, ImportedNodeOverride>;
+  isolatedNodeId?: string | null;
 }
 
 export type ImportedSceneSnapshot = DeepReadonly<ImportedSceneModel>;
@@ -60,6 +68,8 @@ export interface CreateImportedSceneInput {
   metadata: ImportedSceneMetadata;
   warnings?: ImportedSceneWarning[];
   hierarchy?: ImportedNodeModel[];
+  nodeOverrides?: Record<string, ImportedNodeOverride>;
+  isolatedNodeId?: string | null;
 }
 
 export interface PartialTransformModel {
@@ -112,6 +122,8 @@ export function createImportedSceneModel(
     metadata: structuredClone(input.metadata),
     warnings: structuredClone(input.warnings ?? []),
     hierarchy: structuredClone(input.hierarchy ?? []),
+    ...(input.nodeOverrides ? { nodeOverrides: structuredClone(input.nodeOverrides) } : {}),
+    ...(input.isolatedNodeId !== undefined ? { isolatedNodeId: input.isolatedNodeId } : {}),
   };
 }
 
@@ -191,6 +203,53 @@ export function deleteImportedScene(
   const index = imports.findIndex(({ id }) => id === importedSceneId);
   if (index < 0) return false;
   imports.splice(index, 1);
+  return true;
+}
+
+export function hasImportedNode(model: Pick<ImportedSceneSnapshot, "hierarchy">, nodeId: string): boolean {
+  const pending = [...model.hierarchy];
+  while (pending.length) {
+    const node = pending.pop()!;
+    if (node.id === nodeId) return true;
+    pending.push(...node.children);
+  }
+  return false;
+}
+
+export function setImportedNodeVisibility(imports: ImportedSceneModel[], importedId: string, nodeId: string, visible: boolean | null): boolean {
+  const model = findImportedScene(imports, importedId);
+  if (!model || !hasImportedNode(model, nodeId) || !/^node-\d+(?:-\d+)*$/.test(nodeId)) return false;
+  model.nodeOverrides ??= {};
+  const override = { ...model.nodeOverrides[nodeId] };
+  if (visible === null) delete override.visible; else override.visible = visible;
+  if (Object.keys(override).length) model.nodeOverrides[nodeId] = override;
+  else delete model.nodeOverrides[nodeId];
+  return true;
+}
+
+export function setImportedNodeMaterial(imports: ImportedSceneModel[], importedId: string, nodeId: string, materialId: string | null): boolean {
+  const model = findImportedScene(imports, importedId);
+  if (!model || !hasImportedNode(model, nodeId) || !/^node-\d+(?:-\d+)*$/.test(nodeId)) return false;
+  model.nodeOverrides ??= {};
+  const override = { ...model.nodeOverrides[nodeId] };
+  if (materialId) override.materialId = materialId; else delete override.materialId;
+  if (Object.keys(override).length) model.nodeOverrides[nodeId] = override;
+  else delete model.nodeOverrides[nodeId];
+  return true;
+}
+
+export function isolateImportedNode(imports: ImportedSceneModel[], importedId: string, nodeId: string | null): boolean {
+  const model = findImportedScene(imports, importedId);
+  if (!model || (nodeId !== null && !hasImportedNode(model, nodeId))) return false;
+  model.isolatedNodeId = nodeId;
+  return true;
+}
+
+export function resetImportedNodeOverrides(imports: ImportedSceneModel[], importedId: string): boolean {
+  const model = findImportedScene(imports, importedId);
+  if (!model) return false;
+  delete model.nodeOverrides;
+  delete model.isolatedNodeId;
   return true;
 }
 

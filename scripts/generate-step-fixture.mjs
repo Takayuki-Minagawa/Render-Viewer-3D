@@ -1,0 +1,11 @@
+import { OcctKernel } from "occt-wasm";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+const root = new URL("../", import.meta.url);
+const wasm = await readFile(new URL("node_modules/occt-wasm/dist/occt-wasm.wasm", root));
+const kernel = await OcctKernel.init({ wasm });
+const box = kernel.makeBox(10, 20, 30);
+const step = kernel.exportStep(box);
+await mkdir(new URL("tests/fixtures/step/", root), { recursive: true });
+await writeFile(new URL("tests/fixtures/step/box-10x20x30mm.step", root), step);
+kernel.release(box); kernel.releaseAll();
+console.log("Generated synthetic 10 × 20 × 30 mm STEP box.");

@@ -102,6 +102,17 @@ button {
     var(--bg);
 }
 
+#app:has(> .project-toolbar) {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 0;
+}
+#app > .project-toolbar { flex: 0 0 auto; background: var(--surface); }
+#app > .project-toolbar button { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 5px; padding: 5px 9px; cursor: pointer; }
+#app > .project-toolbar button:disabled { opacity: .45; cursor: default; }
+#app:has(> .project-toolbar) > .app-shell { flex: 1 1 auto; height: auto; min-height: 0; }
+
 .app-header {
   z-index: 10;
   display: flex;

@@ -1,10 +1,12 @@
+import { applyTextureMapping } from "./texture-mapping";
+import { PbrMapRuntime } from "./pbr-map-runtime";
 import * as THREE from "three";
 import type { DeepReadonly } from "../../model/scene-model";
 import { materialColorMapSignature } from "../../model/material/material-color-map";
 import type {
   MaterialColorMapModel,
   MaterialDefinitionModel,
-  MaterialTextureWrapMode,
+  MaterialPbrMaps,
 } from "../../model/material/material-model";
 import {
   applyMaterialProjection,
@@ -33,6 +35,7 @@ interface MaterialRuntimeEntry {
   topLeftTextureAssetId?: string;
   textureSignature: string;
   colorMap: ColorMapSnapshot | null;
+  maps?: DeepReadonly<MaterialPbrMaps>;
   valueSignature: string;
   programSignature: string;
   projection: MaterialProjection;
@@ -43,10 +46,12 @@ interface MaterialRuntimeEntry {
 export class MaterialRuntimeCache {
   readonly #entries = new Map<string, MaterialRuntimeEntry>();
   readonly #images: MaterialImageAssetStore | undefined;
+  readonly #pbrMaps: PbrMapRuntime;
   #disposed = false;
 
   constructor(images?: MaterialImageAssetStore) {
     this.#images = images;
+    this.#pbrMaps = new PbrMapRuntime(images);
   }
 
   reconcile(definitions: readonly MaterialDefinitionSnapshot[]): void {
@@ -105,7 +110,10 @@ export class MaterialRuntimeCache {
         entry.projectionDiagnostics = projection.diagnostics;
       }
 
+      entry.maps = definition.maps;
+      this.#pbrMaps.reconcile(entry.material, definition.maps, "bottom-left");
       this.#reconcileColorMap(entry, definition.colorMap);
+      if (entry.topLeftMaterial) this.#pbrMaps.reconcile(entry.topLeftMaterial, definition.maps, "top-left");
     }
 
     for (const [id, entry] of this.#entries) {
@@ -138,7 +146,7 @@ export class MaterialRuntimeCache {
     if (!entry) {
       throw new Error("Missing material runtime for SceneModel id: " + materialId);
     }
-    if (!entry.texture) return entry.material;
+    if (!entry.texture && !this.#pbrMaps.has(entry.material)) return entry.material;
     if (!entry.fallbackMaterial) {
       const fallback = createMeshPhysicalMaterial(entry.projection);
       fallback.name = entry.material.name + " (UV fallback)";
@@ -172,8 +180,12 @@ export class MaterialRuntimeCache {
     entry.colorMap = colorMap;
     if (!colorMap) {
       this.#detachTexture(entry);
-      this.#disposeTopLeftMaterial(entry);
-      this.#disposeFallback(entry);
+      if (!this.#pbrMaps.has(entry.material)) {
+        this.#disposeTopLeftMaterial(entry);
+        this.#disposeFallback(entry);
+      } else {
+        this.#detachTopLeftTexture(entry);
+      }
       entry.textureSignature = "";
       entry.runtimeDiagnostics = [];
       return;
@@ -241,7 +253,17 @@ export class MaterialRuntimeCache {
     materialId: string,
   ): THREE.MeshPhysicalMaterial {
     const colorMap = entry.colorMap;
-    if (!entry.texture || !colorMap) return entry.material;
+    if (!entry.texture || !colorMap) {
+      if (!this.#pbrMaps.has(entry.material)) return entry.material;
+      if (!entry.topLeftMaterial) {
+        entry.topLeftMaterial = createMeshPhysicalMaterial(entry.projection);
+        entry.topLeftMaterial.name = topLeftMaterialName(entry.material.name);
+        entry.topLeftMaterial.userData.sceneMaterialId = materialId;
+        entry.topLeftMaterial.userData.materialTextureUvOrigin = "top-left";
+      }
+      this.#pbrMaps.reconcile(entry.topLeftMaterial, entry.maps, "top-left");
+      return entry.topLeftMaterial;
+    }
     if (entry.topLeftMaterial && entry.topLeftTexture) {
       return entry.topLeftMaterial;
     }
@@ -265,6 +287,7 @@ export class MaterialRuntimeCache {
     entry.topLeftMaterial = material;
     entry.topLeftTexture = texture;
     entry.topLeftTextureAssetId = colorMap.assetId;
+    this.#pbrMaps.reconcile(material, entry.maps, "top-left");
     return material;
   }
 
@@ -352,6 +375,7 @@ export class MaterialRuntimeCache {
 
   #disposeTopLeftMaterial(entry: MaterialRuntimeEntry): void {
     this.#detachTopLeftTexture(entry);
+    if (entry.topLeftMaterial) this.#pbrMaps.disposeMaterial(entry.topLeftMaterial);
     entry.topLeftMaterial?.dispose();
     entry.topLeftMaterial = undefined;
   }
@@ -365,6 +389,7 @@ export class MaterialRuntimeCache {
     this.#detachTexture(entry);
     this.#disposeTopLeftMaterial(entry);
     this.#disposeFallback(entry);
+    this.#pbrMaps.disposeMaterial(entry.material);
     entry.material.dispose();
   }
 
@@ -375,48 +400,7 @@ export class MaterialRuntimeCache {
   }
 }
 
-const TOP_LEFT_UV_Y_FLIP_MATRIX = new THREE.Matrix3().set(
-  1, 0, 0,
-  0, -1, 1,
-  0, 0, 1,
-);
-
-function applyTextureMapping(
-  texture: THREE.Texture,
-  colorMap: ColorMapSnapshot,
-  uvOrigin: MaterialTextureUvOrigin,
-  notifyWrapChange = true,
-): void {
-  const wrapping = toThreeWrapping(colorMap.wrapMode);
-  const wrapChanged = texture.wrapS !== wrapping || texture.wrapT !== wrapping;
-  texture.wrapS = wrapping;
-  texture.wrapT = wrapping;
-  texture.repeat.set(colorMap.repeatX, colorMap.repeatY);
-  texture.offset.set(colorMap.offsetX, colorMap.offsetY);
-  texture.center.set(0.5, 0.5);
-  texture.rotation = THREE.MathUtils.degToRad(colorMap.rotationDegrees);
-  texture.updateMatrix();
-  texture.matrixAutoUpdate = uvOrigin === "bottom-left";
-  if (uvOrigin === "top-left") {
-    texture.matrix.multiply(TOP_LEFT_UV_Y_FLIP_MATRIX);
-  }
-  if (notifyWrapChange && wrapChanged) texture.needsUpdate = true;
-}
-
-function topLeftMaterialName(name: string): string {
-  return name + " (top-left UV origin)";
-}
-
-function toThreeWrapping(mode: MaterialTextureWrapMode): THREE.Wrapping {
-  switch (mode) {
-    case "repeat":
-      return THREE.RepeatWrapping;
-    case "clamp-to-edge":
-      return THREE.ClampToEdgeWrapping;
-    case "mirrored-repeat":
-      return THREE.MirroredRepeatWrapping;
-  }
-}
+function topLeftMaterialName(name: string): string { return name + " (top-left UV origin)"; }
 
 function collectUniqueMaterialIds(
   definitions: readonly MaterialDefinitionSnapshot[],

@@ -8,7 +8,7 @@ Object Tree、Transform、マテリアルプレビューで扱います。形式
 追加できることを優先します。
 
 これはCAD編集kernelや完全な形式変換器ではありません。元ファイルのB-Rep、feature tree、
-constraint、BIM semantic情報を編集・保存することは対象外です。
+constraint、BIM semantic情報を編集することは対象外です。専用projectには元ファイルbytesを保存しますが、CAD topologyを編集して書き戻す形式ではありません。
 
 ## データフロー
 
@@ -32,7 +32,8 @@ File input / Drag & Drop
           ▼
     ImportController
        ├─ JSON化可能なimport record → SceneStore
-       └─ Object3D / Geometry / Material / Texture → ImportedAssetStore
+       ├─ Object3D / Geometry / Material / Texture → ImportedAssetStore
+       └─ 元モデル / sidecar / import設定 → ProjectAssets → .rv3d / IndexedDB
           │
           ▼
  ImportedSceneAdapter → Three.js Scene → selection / Camera Auto Fit
@@ -50,8 +51,8 @@ RegistryへImporterを追加しただけでは自動更新されません。
 | Importer | 実装 | 状態 | 固有の処理 |
 | --- | --- | --- | --- |
 | `GLTFImporter` | Three.js `GLTFLoader` | Stable / 推奨 | GLB / glTFを解析し、階層、標準glTFマテリアル、animation配列をruntimeへ保持します。 |
-| `OBJImporter` | Three.js `OBJLoader` | Stable | Geometryを解析します。`mtllib`は検出して警告しますが、MTLは適用しません。 |
-| `STLImporter` | Three.js `STLLoader` | Stable | Geometryへ既定のlight-gray PBRマテリアルを割り当てます。 |
+| `OBJImporter` | Three.js `OBJLoader` | Stable | 同時選択したMTL・textureを相対パスで解決し、読込完了を待ちます。MTL→Custom PBRは近似です。 |
+| `STLImporter` | Three.js `STLLoader` | Stable | 1 MiB以上はWorkerで解析し、typed geometry bufferをtransferします。小さいファイルはmain thread解析、既定のlight-gray PBR材質を割り当てます。 |
 | `PLYImporter` | Three.js `PLYLoader` | Stable | faceがあればPBR mesh、なければ`Points`として読み、vertex colorを保持します。 |
 | `FBXImporter` | Three.js `FBXLoader` / `TGALoader` | Experimental | 階層、マテリアル、animation、ローカルtexture sidecarを保持し、binary配列をpreflightして`UnitScaleFactor`とLoaderのaxis補正を共通正規化で一度だけ適用します。 |
 | `ColladaImporter` | Three.js `ColladaLoader` | Experimental | 文書の`unit` / `up_axis`とXML構造をLoader作成前に検証し、Loaderの補正を戻して共通正規化で一度だけ適用します。階層、マテリアル、animationとローカルsidecarを保持します。 |
@@ -64,13 +65,17 @@ FBX圧縮配列preflightと3MF展開で使うThree.js vendored `fflate`も必要
 
 ## ローカルresource解決と安全上限
 
-`.gltf`、FBX、DAEの相対URIは、同時に選択されたファイルを`LoadingManager`経由のBlob URLへ
+`.gltf`、FBX、DAE、OBJ / MTLの相対URIは、同時に選択されたファイルを`LoadingManager`経由のBlob URLへ
 対応付けます。query・fragment、URL encode、相対directory、大文字小文字を正規化し、
 sidecarの完了を待ってからBlob URLをrevokeします。abort・解析失敗・sidecar失敗でも一時sceneと
 URLを解放します。`data:` URIは許可し、HTTP(S)など外部URIは意図しない通信を避けるため拒否します。
-Draco、KTX2 / Basis、Meshoptの追加decoderは現在登録していません。
+`GLTFLoader`へDraco・Meshopt decoderとKTX2 / Basis transcoderを接続しています。
+Three.js r185の`new URL(..., import.meta.url)`参照をViteが解決し、decoder資産をPagesのbase配下へ
+出力します。GLTFLoaderとdecoder JSは必要時だけ遅延読込し、追加のpublicコピーを生成しません。モデルURL用のLocalResourceResolverと
+同梱decoder用のmanagerを分け、外部model URI拒否を維持します。KTX2は実際のrenderer能力を
+`detectSupport`へ渡します。decode用Workerは処理終了時にdisposeします。
 
-- main threadで解析するGLB / glTF、FBX、DAE（各sidecarを含む）、OBJ、STL、PLYは、
+- GLB / glTF、FBX、DAE（各sidecarを含む）、OBJ、STL、PLYは、
   選択ファイル合計32 MiBまでです。
 - binary FBXはLoader import / factoryより前にnode / property / depthと、圧縮配列の宣言展開量・
   streaming実展開量・圧縮比・宣言値との一致を検証します。
@@ -79,10 +84,17 @@ Draco、KTX2 / Basis、Meshoptの追加decoderは現在登録していません�
   `unzipSync`前に検証します。XMLはDOM構築前に100,000要素・深さ256へ制限します。
 - DAEはDOM構築前に過大なXML要素数・汎用markup深さを検査し、DOCTYPE / ENTITY、`instance_node`、過大なscene構造も拒否します。3MFもDOCTYPE / ENTITYを拒否し、
   単一root `3D/*.model`だけを許可してmulti-part、model relationship part、texture resourceを拒否します。
-- PLY / FBX / DAE / 3MFの解析結果は50,000 scene node、深さ256、10,000 renderable、
+- GLTF / OBJ / STL / PLY / FBX / DAE / 3MFの解析結果は50,000 scene node、深さ256、10,000 renderable、
   200万position vertex、200万vertex reference、200万primitiveまでです。
 - STEPはWorker入力128 MiB、出力200万頂点・200万triangleまでです。
-- glTF / FBX / DAEのanimation配列はruntimeへ保持しますが、現在は再生UIがありません。
+- glTFはbuffer宣言・Meshopt展開先を128 MiBまで、accessor件数とnodeの深さ・循環を解析前に検査します。
+- KTX2 headerをdecode前に検査し、glTF / OBJのtextureはdecode後にも一辺16,384 px・合計32 MPを検査します。
+- STLは1 MiB以上で利用可能なWorkerへ移し、入力ArrayBufferと出力typed bufferをtransferします。成功・失敗・abortでWorkerを終了します。Workerがない環境ではmain thread解析です。
+- glTF / FBX / DAEのclipは選択・再生・一時停止・解除・シーク・速度変更を提供します。1clipを選択し、停止中は連続描画しません。
+
+3MFはarchive preflight、XML / 関係 / mesh検査、Importerの読込・正規化へ責務を分けています。
+解析後budgetは解析中のピークメモリやUI停止を保証するものではありません。事前宣言検査、
+実展開検査、Worker境界と区別します。全ImporterのWorker化は行っていません。
 
 ## 共通正規化
 
@@ -109,21 +121,33 @@ OBJ / STL / PLYなど単位またはup-axisを取得できない形式でAutoを
 
 ## SceneModelとruntime assetの境界
 
-`ImportedSceneModel`はID、asset ID、ファイル情報、統計、warning、表示用階層、root transform、
-material modeを持つJSON化可能なrecordです。一方、`THREE.Object3D`、Geometry、Material、
+`ImportedSceneModel`はID、asset ID、ファイル情報、統計、warning、階層、root transform、
+material mode、nodeOverrides、isolatedNodeIdを持つJSON化可能なrecordです。一方、`THREE.Object3D`、Geometry、Material、
 Textureは`ImportedAssetStore`だけが所有します。これによりSceneModelへ巨大なtyped arrayや
-循環参照を混入させず、削除・アプリ終了時にGPU / CPU resourceを一度だけdisposeできます。
+循環参照を混入させません。現在シーン・Undo・Redo・処理中transactionの参照がなくなった時点でGPU / CPU resourceを解放します。
 
 別々のasset rootが同一のGeometry / Material / Texture / Image / Skeleton /
 instancing resourceを共有すると、一方だけを削除した時点で所有権が曖昧になります。
 そのため登録時にasset間の共有を検出して明示的に拒否し、各resourceが
 必ず1つのassetだけに所有される境界を維持します。
 
-この分離の結果、import recordだけでは外部モデルを再構築できません。シーン永続化を追加する
-場合は、元ファイルを再選択する仕組み、またはassetを別形式で保存・復元する仕組みが必要です。
+import record単体では外部モデルを再構築できません。`.rv3d`はmanifestと元ファイル・sidecar・
+材質画像・HDR bytesをまとめ、importオプションとImporter版を記録します。復元時は元ファイルを
+再importして新しいruntime IDへ対応付け、編集rootのTransformを適用します。元の正規化rootを
+もう一度追加変換しないため単位・軸・center / groundを二重適用しません。全assetを準備してから
+公開し、失敗時は元シーンへ戻します。未知version、型、有限数値、ID重複、欠落参照、容量、
+ファイルchecksumを検査します。形式詳細と上限は[README](../README.md#保存復元と操作履歴)を参照してください。
 
-Viewportのraycastでは子mesh / `Points` / `Line`をimport root IDへ対応付けます。Object Treeは元階層を表示しますが、
-現段階の選択、visibility、Transform、material override、削除はimport root単位です。
+履歴は最大50件・参照asset推定256 MiBを目安に削減し、現在のシーンが必要とするassetは保持します。
+SceneStoreはImmerによる構造共有で不変Snapshotを公開し、同値更新は通知しません。
+
+ViewportのraycastとObject Treeはimport root IDに加えて子nodeの`node-0-2`形式のIDを返します。
+子indexの経路は保存された階層と対応します。選択はEditorStoreのroot選択とUIのnode選択を分離し、
+保存する編集は`nodeOverrides?: Record<string, { visible?: boolean; materialId?: string }>`と
+`isolatedNodeId?: string | null`です。親の材質を子孫へ適用し、深いnodeの上書きを優先します。
+隔離は対象の子孫と祖先を残し、明示的な非表示指定を尊重します。解除で元のvisibilityを復元します。
+nodeのlocal TransformとBoneは変更しません。Transform・削除は従来どおりroot単位です。
+Importer更新で階層の順序が変わる場合のnode ID互換性は、Importer版と復元結果の検証が必要です。
 
 ## Material mode
 
@@ -137,7 +161,7 @@ Customモードの初期候補になります。Texture slotは共通モデル�
 所有物として保持するため、ImportedモードではglTF textureを含む元の見た目を維持します。
 
 runtime assetは元マテリアル参照を保持するため、CustomからImportedへ戻したときに各meshの
-割り当てを復元できます。Customで参照中の共有マテリアルは削除できません。
+割り当てを復元できます。rootのCustom候補または子node上書きが参照する共有マテリアルは削除できません。node上書きがある場合はrootモード適用後に上書きを反映します。
 
 PLY point cloudの`PointsMaterial`はPBR共有マテリアルと互換でないため、Custom modeの
 上書き対象に含めません。rootのmodeをCustomへ切り替えても`Points`は読み込み時のmaterialを
@@ -222,6 +246,22 @@ unit / axis・animation・sidecar待機・abort / error cleanup、FBX binary配�
 `linkedom`でNode.jsへ`DOMParser`を補い、実fixtureをThree.js addonへ通して実loaderとの接続も確認します。
 
 STEP unit testは注入したWorker clientでWorker境界・品質設定・必ず行うcleanupを検証します。
-実ブラウザでのWASM起動と実在STEPファイルの表示はbuild後のsmoke testでも確認する必要が
-あります。共通ではimport record command、runtime asset lifecycle、material round-trip、
+PlaywrightではPagesのbase配下で同梱decoderと実OCCT Worker / WASMを起動し、合成STEP boxの
+寸法・triangle数を確認します。Chromium / Firefox / WebKitの個別確認と最終一括結果は
+[検証記録](./IMPLEMENTATION_VALIDATION.md)を参照してください。実機Safariは別途確認対象です。共通ではimport record command、runtime asset lifecycle、material round-trip、
 Camera Auto Fitを検証します。
+
+
+## 描画・出力・性能の境界
+
+DemandRendererは変更要求を次の1frameへまとめ、animation再生中だけ連続描画します。
+GLBは別のhierarchy / geometry / material / texture snapshotを作って非同期出力し、編集補助を除外します。
+専用projectとGLBは役割が異なり、GLBから元の編集パラメータやPOV-Ray概念の完全復元はしません。
+断面は蓋なし、距離は三角形表面のworld-space交点間です。STEPのB-Rep厳密計測ではありません。
+
+`renderer.info`の件数とimport時間を表示し、影・pixel ratioを変更できます。固定STL / OBJの解析時間は
+`scripts/benchmark-importers.mjs`で再測定できます。今回STL Worker経路を追加しましたが、
+BVH / LOD / 簡略化は実利用データでのraycast・draw call等のボトルネックを確認するまで採用しません。
+この未採用判断を、実装済みの高速化やWorker総処理時間の短縮と同一視しません。
+
+細かな形式別制限・decoder配布・同期parser測定は[Importer boundaries](./IMPORTER_BOUNDARIES.md)も参照してください。

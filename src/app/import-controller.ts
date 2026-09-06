@@ -38,6 +38,7 @@ export class ImportController {
     readonly sceneStore: SceneStore,
     readonly editorStore: EditorStore,
     readonly viewport: ImportViewport,
+    readonly onSource?: (assetId: string, primary: File, files: readonly File[], options: ImportOptions) => void,
   ) {}
 
   async importFiles(
@@ -97,6 +98,7 @@ export class ImportController {
         hierarchy.nodes,
         materialDefinitions[0]?.id ?? null,
       );
+      this.onSource?.(assetId, primary, files, options);
       this.sceneStore.update((draft) => {
         addImportedScene(draft.imports, model);
         draft.materials.push(...materialDefinitions);

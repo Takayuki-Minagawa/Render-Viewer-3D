@@ -6,6 +6,10 @@ import type { TransformModel } from "../model/scene-model";
 import type { SceneGraphAdapter } from "./scene-graph-adapter";
 
 interface SceneInteractionOptions {
+  onImportedNodeSelected?: (rootId: string, nodeId: string) => void;
+  onRenderRequested?: () => void;
+  onSurfacePicked?: (intersection: THREE.Intersection | undefined) => boolean;
+  isPointVisible?: (point: THREE.Vector3) => boolean;
   onObjectSelected: (objectId: string | null) => void;
   onObjectTransformCommitted: (
     objectId: string,
@@ -30,10 +34,11 @@ interface PendingTransform {
 
 export class SceneInteractionAdapter {
   readonly #scene: THREE.Scene;
-  readonly #camera: THREE.Camera;
+  #camera: THREE.Camera;
+  #transformEnabled = true;
   readonly #canvas: HTMLCanvasElement;
   readonly #graph: SceneGraphAdapter;
-  readonly #orbitControls: OrbitControls;
+  #orbitControls: OrbitControls;
   readonly #options: SceneInteractionOptions;
   readonly #raycaster = new THREE.Raycaster();
   readonly #pointer = new THREE.Vector2();
@@ -47,6 +52,7 @@ export class SceneInteractionAdapter {
   #selectedObjectId: string | null = null;
   #pointerStart: PointerStart | null = null;
   #pendingTransform: PendingTransform | null = null;
+  #initialTransform: PendingTransform | null = null;
   #draggedTransform = false;
   #orbitEnabledBeforeTransform: boolean | null = null;
 
@@ -77,6 +83,37 @@ export class SceneInteractionAdapter {
     this.#scene.add(this.#transformHelper, this.#selectionHelper);
     this.#bindEvents();
   }
+
+  cancelTransform(): boolean {
+    const initial = this.#initialTransform;
+    if (!initial) return false;
+    const object = this.#graph.getObjectById(initial.objectId);
+    if (object) {
+      this.#pendingTransform = initial;
+      this.#restorePendingTransform(initial.objectId, object);
+    }
+    this.#pointerStart = null; this.#draggedTransform = false;
+    this.#endTransformInteraction();
+    this.#transformControls.disconnect(); this.#transformControls.connect(this.#canvas);
+    this.refreshSelection(); this.#options.onRenderRequested?.();
+    return true;
+  }
+
+  setOrbitControls(controls: OrbitControls): void { this.#orbitControls = controls; }
+
+  setCamera(camera: THREE.Camera): void {
+    this.#camera = camera;
+    this.#transformControls.camera = camera;
+    this.#options.onRenderRequested?.();
+  }
+
+  setTransformEnabled(enabled: boolean): void {
+    this.#transformEnabled = enabled;
+    this.#transformControls.enabled = enabled;
+    this.refreshSelection();
+  }
+
+  getHelpers(): THREE.Object3D[] { return [this.#transformHelper, this.#selectionHelper]; }
 
   setSelection(objectId: string | null): void {
     if (objectId !== this.#selectedObjectId && this.#transformControls.dragging) {
@@ -130,6 +167,12 @@ export class SceneInteractionAdapter {
       return;
     }
 
+    if (!this.#transformEnabled) {
+      this.#transformControls.detach();
+      this.#selectionHelper.setFromObject(object);
+      this.#selectionHelper.visible = true;
+      return;
+    }
     if (this.#transformControls.object !== object) {
       this.#transformControls.attach(object);
     }
@@ -148,7 +191,13 @@ export class SceneInteractionAdapter {
   }
 
   #bindEvents(): void {
+    this.#transformControls.addEventListener("change", () => this.#options.onRenderRequested?.());
     const options = { signal: this.#abortController.signal };
+    (this.#canvas.ownerDocument ?? this.#canvas).addEventListener("keydown", (event) => {
+      if ((event as KeyboardEvent).key === "Escape" && this.cancelTransform()) {
+        event.preventDefault(); event.stopImmediatePropagation();
+      }
+    }, { ...options, capture: true });
     this.#canvas.addEventListener(
       "pointerdown",
       (event) => {
@@ -196,6 +245,7 @@ export class SceneInteractionAdapter {
         this.#orbitControls.enabled = false;
         this.#draggedTransform = true;
         this.#rememberPendingTransform();
+        this.#initialTransform = this.#pendingTransform;
         return;
       }
       this.#restoreOrbitControls();
@@ -267,6 +317,7 @@ export class SceneInteractionAdapter {
 
     try {
       this.#options.onObjectTransformCommitted(objectId, transform);
+      this.#initialTransform = null;
     } catch (error) {
       this.#pendingTransform = previousPending;
       throw error;
@@ -279,6 +330,7 @@ export class SceneInteractionAdapter {
       this.#transformControls.axis = null;
     }
     this.#pendingTransform = null;
+    this.#initialTransform = null;
     this.#restoreOrbitControls();
   }
 
@@ -319,10 +371,12 @@ export class SceneInteractionAdapter {
     const intersection = this.#raycaster.intersectObjects(
       this.#graph.getPickableObjects(),
       false,
-    )[0];
-    this.#options.onObjectSelected(
-      (intersection?.object.userData.sceneModelId as string | undefined) ?? null,
-    );
+    ).find((hit) => this.#options.isPointVisible?.(hit.point) !== false);
+    if (this.#options.onSurfacePicked?.(intersection)) return;
+    const rootId = intersection?.object.userData.sceneModelId as string | undefined;
+    this.#options.onObjectSelected(rootId ?? null);
+    const nodeId = intersection?.object.userData.importedNodeId as string | undefined;
+    if (rootId && nodeId) this.#options.onImportedNodeSelected?.(rootId, nodeId);
   }
 
   #captureTransformModel(object: THREE.Object3D): TransformModel {

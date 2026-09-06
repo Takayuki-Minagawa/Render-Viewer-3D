@@ -15,6 +15,9 @@ export type MaterialTextureWrapMode =
   | "clamp-to-edge"
   | "mirrored-repeat";
 
+export type MaterialPbrMapChannel = "normal" | "roughness" | "metalness" | "ao";
+export type MaterialPbrMaps = Partial<Record<MaterialPbrMapChannel, MaterialColorMapModel>>;
+
 export interface MaterialColorMapModel {
   assetId: string;
   sourceName: string;
@@ -288,5 +291,7 @@ export interface MaterialDefinitionModel {
   presetId: MaterialPresetId | null;
   preview: PhysicalMaterialPreviewModel;
   colorMap: MaterialColorMapModel | null;
+  /** Numeric PBR textures use linear data; absent channels use preview scalar values. */
+  maps?: MaterialPbrMaps;
   pov: PovMaterialModel;
 }

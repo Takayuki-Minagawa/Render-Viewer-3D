@@ -1,191 +1,111 @@
 # Render Viewer 3D
 
-TypeScriptとThree.jsで構築した、ブラウザ上で3Dプリミティブと外部3D / CADモデルを
-追加・編集・確認できる、パラメータ駆動型の3Dシーンエディターです。
+TypeScript・Three.js・Viteによる、ブラウザ内で3Dプリミティブと外部3D / CADモデルを編集・確認するアプリです。保存・復元、Undo／Redo、画像・GLB出力、部品確認、圧縮glTF、アニメーション、照明・PBR画像編集を提供します。
 
-> A browser-based, parameter-driven 3D scene editor built with TypeScript and Three.js.
+[公開ページ](https://takayuki-minagawa.github.io/Render-Viewer-3D/)
 
-現在は **Phase 4（拡張可能な3D / CADモデル読み込み）** まで実装しています。
-POV-Ray本体は組み込んでおらず、POV-Ray SDLの入出力やレンダリング結果の一致を
-提供するものではありません。
+## できること
 
-## 公開ページ
+- Box / Sphere / Cylinder / Cone / Plane / Torusの追加、名称・寸法・位置・回転・拡大率の編集、複製・削除。
+- Scene Treeと3Dビューからの選択、TransformControls、OrbitControls、Grid／Axes切替。
+- 共有マテリアルの作成・検索・割当・複製・個別化、使用中材質の削除防止、8種類のプリセット。
+- ローカル画像によるbase color／normal／roughness／metalness／AOマップ、繰返し・オフセット・回転・端処理。
+- `.rv3d`プロジェクト保存・復元とIndexedDB自動保存。元モデル、sidecar、材質画像、HDR環境も保存。
+- Undo／Redo。数値・名称入力、slider、gizmoの連続操作をまとめ、Escで編集中の操作を取消。
+- 現在のViewport解像度でPNG出力、標準mesh・材質・animationのGLB出力。
+- 透視／正投影、正面・背面・左右・上下・斜めの標準視点、選択物を画面に収めるFit。
+- 蓋なし断面表示、mesh表面の2点間距離計測。内部単位はm、表示はmm／cm／m。
+- 読込モデルの子node選択、表示指定、隔離、子孫へ継承する材質上書き。
+- 読込clipの選択、再生・一時停止・解除、シーク、速度変更。
+- Ambient／Directional Lightの色・強度・位置、露出、ローカルRadiance RGBE `.hdr`環境の編集。
+- Draw call・triangle・geometry／texture数・import時間の表示、描画倍率・影の切替。
+- 日本語／English、ダーク／ライトテーマ、簡易マニュアル。
 
-<https://takayuki-minagawa.github.io/Render-Viewer-3D/>
+描画は変更時に要求をまとめて行い、静止中の連続描画を止めます。animation再生中は連続描画します。
 
-## 実装済みの機能
+## 保存・復元と操作履歴
 
-### Phase 1（最小3Dビュー）
+画面上部の「プロジェクト保存」で`.rv3d`をダウンロードし、「開く」で復元します。形式はversion付きmanifestと元ファイルのバイナリをまとめたコンテナです。最大512 MiB、manifest最大16 MiB、内包ファイル最大4,096件・1件128 MiBです。SHA-256、容量、型、数値、ID、参照を検査し、未知のversionや不正な参照を拒否します。コンテナversion 1とSceneModelのschemaVersionは別管理です。
 
-- TypeScript + Vite + Three.jsによる静的Webアプリ
-- Perspective Camera / WebGL Renderer
-- OrbitControlsによる回転・パン・ズーム
-- Grid / Axesの表示切替
-- 初期Box、Ground Plane、固定Ambient / Directional Light
-- カメラの初期視点リセット
-- 日本語（既定）/ Englishの表示切替
-- ダーク / ライトテーマの切替
-- 日英対応の簡易マニュアル
-- SVGファビコン
-- SceneModel → Store → Three.js Adapterの分離構成
-- GitHub ActionsによるGitHub Pagesデプロイ
+元モデルを保存済みのimport設定で再解析し、別のruntime領域へ準備してからシーンを切り替えます。正規化済みモデルの外側へ編集Transformを戻すため、単位・軸補正を二重適用しません。復元失敗時は元シーンを維持します。準備領域はモデル・画像・HDRの展開後推定量を合計512 MiBに制限します。これはコンテナ容量とは別の上限で、解析中の一時領域や退避中の旧シーンを含む総メモリ上限ではありません。将来のImporter変更によって再解析結果が変わる可能性はあり、manifestにImporter版を記録します。任意のThree.js instanceやObject URLをファイルへ保存する形式ではありません。
 
-### Phase 2（オブジェクト編集）
+自動保存は変更が確定して約800 ms後にIndexedDBへまとめて書き込みます。次回起動時に自動では開かず、「自動保存から復元」を押して復元します。保存中・保存済み・失敗を表示します。ブラウザ保存は利用環境の容量制限やデータ消去の影響を受けるため、持ち出し・長期保管には明示的な`.rv3d`保存を使います。
 
-- Box / Sphere / Cylinder / Cone / Plane / Torusの6種類のプリミティブ追加
-- Scene Treeでのオブジェクト選択、表示 / 非表示、プリミティブ追加
-- Inspectorでの名前変更、複製、削除、Transform（位置・回転・スケール）とGeometryパラメータ編集
-- Viewportのraycastによる選択とTransformControlsによる直接操作
-- `W` / `E` / `R`による移動・回転・スケール切替
-- `Delete`による削除、`Ctrl+D` / `Cmd+D`による複製
-- 編集内容をSceneModelへ反映し、Three.js Sceneをモデルから同期する構成
+履歴は最大50件、現在のシーンに加えて履歴だけが保持するassetとsnapshotの推定量256 MiBを目安に古い履歴を破棄します。現在のシーンに必要なassetはこの履歴削減で破棄しません。GPUの正確なbyte数を測った上限ではありません。削除済みのモデル・画像も履歴が参照する間は保持し、不要になると解放します。カメラ移動と選択はUndo対象外です。新しい編集はRedo履歴を破棄し、プロジェクトを開くと以前の履歴をリセットします。import・画像読込・復元の非同期処理中は編集を直列化します。
 
-### Phase 3（マテリアル管理とWebGLプレビュー）
+| ショートカット | 操作 |
+| --- | --- |
+| W / E / R | 移動／回転／拡大縮小 |
+| Ctrl/Cmd + D | プリミティブを複製 |
+| Delete / Backspace | 選択したオブジェクトを削除 |
+| Ctrl/Cmd + Z | Undo |
+| Ctrl/Cmd + Shift + Z、Ctrl/Cmd + Y | Redo |
+| Ctrl/Cmd + S | プロジェクト保存 |
+| Esc | 連続入力・gizmo編集を取消 |
 
-- オブジェクト間で共有できるマテリアルライブラリ
-- マテリアルの作成、検索、カテゴリ絞り込み、使用数表示、割り当て、複製、名称変更、個別化
-- 使用中マテリアルの削除防止
-- Matte、Matte Plastic、Glossy Plastic、Metal、Glass、Frosted Glass、Wood Base、Concreteの8プリセット
-- Color、Diffuse、Specular、Roughness、Metallic、Reflection、Transmission、IOR、Opacity、Emissionの基本編集
-- 数値項目のスライダーと数値入力、代表的なIORのプリセット
-- Transparent、Double sided、Wireframeの切替
-- ローカルPNG / JPEG / WebPをベースカラーマップとして読み込み、繰り返し・オフセット・回転・端処理を編集
-- Three.js `MeshPhysicalMaterial`によるリアルタイムプレビュー
-- 外部HDRIを使用しない、ローカル生成のニュートラルな環境反射
-- Box / Sphere / Planeで材質差を確認できる初期シーン
-- POV-Ray材料概念を「直接プレビュー」「近似プレビュー」「保存のみ」に分類する対応状況一覧
-- `texture`、`pigment`、`normal`、`finish`、`interior`、`media`などを分離したSceneModel v2
-
-詳細は [POV-Ray material concept coverage](./docs/POVRAY_MATERIAL_COVERAGE.md) を参照してください。
-
-### Phase 4（拡張可能な3D / CADモデル読み込み）
-
-- GLB / glTF、OBJ、STL、PLY、および実験的なSTEP / STP、FBX、DAE、3MFの読み込み
-- 拡張子からImporterを選択するRegistry / ImportManager構成
-- Importボタン、複数ファイル選択、およびViewportへのドラッグ＆ドロップ
-- 単位、座標系、中央寄せ、接地、STEP tessellation品質の読み込みオプション
-- `.gltf`、FBX、DAEから参照するローカルbuffer・画像を、同時選択したsidecarファイルから解決
-- PLY / FBX / DAE / 3MFのThree.js addonを形式別のdynamic chunkとして必要時だけ読み込み
-- 読み込み後のObject Tree、メタデータ、警告、およびroot単位の選択・表示・Transform・削除
-- 読み込み元のマテリアルとアプリの共有マテリアルを切り替えるImported / Customモード
-- 読み込みマテリアルのPBR scalar / colorを共有MaterialDefinitionへ変換し、Custom候補として登録
-- 読み込み直後にモデル全体を収めるCamera Auto Fit
-- STEPの解析と三角形化をWeb Worker内のOpen CASCADE WebAssemblyで実行
+入力欄ではブラウザの文字編集ショートカットを優先します。
 
 ## 外部3D / CADデータの読み込み
 
-ViewportのImportボタン、またはドラッグ＆ドロップから読み込みます。GLB / glTFを
-推奨交換形式とし、対応model拡張子とmodel-onlyの`IMPORT_FILE_ACCEPT`はImporter Registryから生成します。
-複数選択用file inputの`IMPORT_FILE_INPUT_ACCEPT`は、そのmodel拡張子へsidecar用の別リスト
-`IMPORT_RESOURCE_EXTENSIONS`を加えて生成します。
+ImportボタンまたはViewportへのドラッグ＆ドロップを使います。sidecarは本体と同時に選択してください。単位、座標系、中央寄せ、接地、STEP tessellation品質を指定できます。
 
-| 形式 | 拡張子 | Loader | 状態・主な扱い |
-| --- | --- | --- | --- |
-| glTF / GLB | `.gltf`, `.glb` | Three.js `GLTFLoader` | 推奨。階層・mesh・標準glTFマテリアルを保持します。ローカルsidecarは本体と同時に選択します。 |
-| Wavefront OBJ | `.obj` | Three.js `OBJLoader` | Geometry中心。`mtllib`参照は警告し、現在はfallbackマテリアルで表示します。 |
-| STL | `.stl` | Three.js `STLLoader` | Geometry中心。light gray、roughness 0.6、metallic 0の既定マテリアルを割り当てます。 |
-| PLY | `.ply` | Three.js `PLYLoader` | Stable。faceがあるデータはmesh、faceのないデータはpoint cloudとして読み込み、vertex colorを保持します。 |
-| Autodesk FBX | `.fbx` | Three.js `FBXLoader` | Experimental。階層・マテリアル・animationとローカルtexture sidecarを保持し、binary配列を事前検査して`UnitScaleFactor`とup-axisを一度だけ正規化します。 |
-| COLLADA / DAE | `.dae` | Three.js `ColladaLoader` | Experimental。文書の`unit` / `up_axis`を事前検査して一度だけ正規化し、階層・マテリアル・animationとローカルsidecarを保持します。 |
-| 3MF | `.3mf` | Three.js `3MFLoader` | Experimental。単一root model partのunit、mesh、マテリアルを読み込みます。 |
-| STEP / STP | `.step`, `.stp` | `occt-wasm` 4.3.1 | Experimental。Worker内でB-Repを三角形meshへ変換します。 |
+| 形式 | 拡張子 | 状態・主な扱い |
+| --- | --- | --- |
+| glTF / GLB | `.gltf`, `.glb` | 階層、mesh、標準材質、animation。Draco／Meshopt圧縮、KTX2／Basis textureに対応。 |
+| Wavefront OBJ | `.obj` | 同時選択したMTL・画像を相対パスで解決。MTLはPhong系材質で、Custom PBR変換は近似。 |
+| STL | `.stl` | Geometryと既定のlight gray材質。1 MiB以上は利用可能な環境でWorker解析。 |
+| PLY | `.ply` | Stable。mesh／point cloudとvertex color。 |
+| FBX | `.fbx` | Experimental。階層、材質、animation、ローカルtexture、宣言単位と軸を正規化。 |
+| COLLADA | `.dae` | Experimental。階層、材質、animation、ローカルsidecar。unitとY_UP／Z_UPを正規化。 |
+| 3MF | `.3mf` | Experimental。単一root model partのunit、mesh、材質。multi-part・texture resourceは未対応。 |
+| STEP / STP | `.step`, `.stp` | Experimental。Open CASCADE WASMをWorkerで実行し、B-Repから単一triangle meshへ変換。 |
 
-アプリ内部の長さはmeter、上方向はY-upです。AutoではglTFをmeter / Y-up、STEPを
-millimeterとして扱います。FBXは宣言された`UnitScaleFactor`（centimeter / file unit）と
-Loaderのaxis補正を共通正規化へ戻して一度だけ適用し、factorがなければmeterを仮定して警告します。
-DAEは文書の`unit`とY_UP / Z_UPを読み、Loaderの補正を共通正規化へ戻して一度だけ適用します
-（X_UPは未対応です）。3MFはroot modelの`unit`（micron / millimeter / centimeter / inch / foot / meter）を
-読み、Autoへ渡してZ-upからY-upへ一度だけ変換します。package検査が完了できない場合だけmillimeterを仮定し、
-警告を表示します。単位または座標系を検出できないOBJ / STL / PLYは
-meter / Y-upとして扱い、Inspectorへ警告を表示します。Center ModelとPlace on Groundは
-読み込み時のBounding Boxを使用します。Low / Medium / High品質はSTEP tessellationの
-細かさを変更します。
+アプリ内部はmeter／Y-upです。AutoはglTFをmeter／Y-up、STEPをmillimeterとして扱い、FBX・DAE・3MFでは対応する宣言値を使います。不明なOBJ／STL／PLYの単位・軸はmeter／Y-upと仮定して警告します。正規化はimport rootへ一度だけ適用します。
 
-Object Treeには読み込んだ階層を表示しますが、現段階の選択、Transform、表示切替、
-マテリアル上書きは読み込んだモデルのroot単位です。Importedモードへ戻すと、読み込み時の
-meshマテリアルを復元します。詳しい設計、追加手順、ライブラリ選定理由は
-[CAD import architecture](./docs/CAD_IMPORT_ARCHITECTURE.md) を参照してください。
+rootの名称・Transform・表示・削除と、子nodeの選択・表示・隔離・材質変更を分けています。子nodeのlocal Transform編集は提供しません。子node IDは元階層の子indexパスです。親の材質指定は子孫へ適用され、より具体的な子の指定が優先します。指定解除で親／rootのImported・Custom材質へ戻り、表示指定解除で元の表示状態へ戻ります。Points／LineはPBR材質上書き対象外です。
 
-## POV-Ray概念プロファイルとWebGLプレビュー
+[Importer設計・形式別上限](./docs/CAD_IMPORT_ARCHITECTURE.md)
 
-マテリアルは、Three.jsで表示するためのWebGLプレビュープロファイルと、
-POV-Rayの材料概念を整理して保持するプロファイルを別々に持ちます。
-「基本」タブのプレビュー値とPOV-Ray概念プロファイルは相互に自動変換・同期されません。
-POV-Ray概念プロファイルを変更してもWebGL表示は変わらず、プレビュー値を変更しても
-POV-Ray概念プロファイルは自動更新されません。
+## 出力・計測の範囲
 
-対応状況の意味は次のとおりです。
+PNGは現在のcanvas解像度で出力し、Grid／Axes／gizmo等の補助表示を含めるか選べます。高解像度指定・透明背景は未対応です。GLBは表示対象のobject・mesh・標準材質・animationを出力し、編集補助表示を除外します。プリミティブの編集パラメータ、POV-Ray概念プロファイル、全アプリ設定を完全に戻す用途には`.rv3d`を使用します。
 
-| 表示 | 意味 |
-| --- | --- |
-| 直接プレビュー | 対応するThree.jsプロパティへ近い形で反映します。POV-Rayと同じ画像になることを保証しません。 |
-| 近似プレビュー | Three.js/WebGLの物理ベース材質で概念を近似します。 |
-| 保存のみ | SceneModel内に構造や値を保持しますが、Viewportでは描画しません。ファイルへの永続保存を意味しません。 |
+断面には切断面の蓋を生成しません。計測はRaycasterによるworld-spaceのmesh表面2点間距離です。STEPも三角形化した面上で計測し、B-Repの厳密寸法・曲面間最短距離は計算しません。計測点、断面、再生位置、描画倍率はViewportの作業中設定で、専用projectに永続化する対象ではありません。標準視点・投影・カメラ、ライト・露出・HDR・影はSceneModelの保存対象です。
 
-例として、SceneModelは2.333を超えるIORも保持できますが、現在のThree.jsプレビューでは
-`MeshPhysicalMaterial`の範囲に合わせて1〜2.333へ制限して表示します。
+## POV-Ray概念と材質画像
+
+POV-Ray本体は組み込んでおらず、SDLの入出力やピクセル互換を提供しません。WebGLの`preview`とPOV-Ray概念を保持する`pov`は別プロファイルで、自動変換・同期しません。「保存のみ」はViewportに効果を描かないという分類です。値はSceneModelと`.rv3d`には保持できます。
+
+PNG／JPEG／WebPの画像マップは1ファイル16 MiB、一辺4096 px、約16 MP、画像storeの推定常駐量256 MiBが上限です。base colorはsRGB、normal／roughness／metalness／AOは数値データとして扱います。UVのないmeshでは画像を使わずscalar／base colorへフォールバックします。normalマップは接線空間、roughnessはG、metalnessはB、AOはRチャンネルを使います。bump map、SVG、アニメーション画像、POV-Ray image projectionは未対応です。ローカルHDRはRadiance RGBEのみ、32 MiB・一辺8192 px・8 MPまでです。
+
+[POV-Ray材料概念の対応範囲](./docs/POVRAY_MATERIAL_COVERAGE.md)
 
 ## 現在の制限
 
-- POV-Rayの実行ファイル、ソースコード、公式アセットは含まれていません。
-- POV-Ray SDLの読込、書出し、構文検証、任意の材質の往復変換には対応していません。
-- WebGLプレビュープロファイルとPOV-Ray概念プロファイルの相互変換・同期は行いません。
-- プロシージャルパターン、積層texture、image map、normal / bump map、media、caustics、subsurfaceなどは、概念カタログまたはSceneModel内の保持対象であり、現在のViewportでは描画しません。
-- マテリアルエディターのカラーマップはPNG / JPEG / WebPのみ対応し、16 MiB・一辺4096 px・約16 MP・常駐推定256 MiBを上限とします。SVG、アニメーション画像、HDRI、normal / bump mapは未対応です。
-- ローカルカラーマップの画像実体はブラウザメモリ内だけに保持され、ページ再読み込み後は再選択が必要です。UVのない読み込みmeshは画像を適用せずベース色へフォールバックします。
-- Three.js/WebGLによる表示であり、POV-Rayとのピクセル互換性はありません。
-- シーンのファイル保存・復元には未対応のため、ページを再読み込みすると編集内容は初期状態に戻ります。
-- ライト編集、AO、PNG出力、JSON入出力、比較機能は未実装です。
-- 対応形式はGLB / glTF、OBJ、STL、PLY、STEP / STP、FBX、DAE、3MFです。
-- 3DM、IGES / IGS、BREP / BRP、IFC、DXFは未実装です。3DM / IGES / BREPはbrowser対応CAD parser、Worker境界、階層・属性保持の評価が必要で、現在の`occt-wasm` buildはIGESを含みません。IFCは大規模BIMのsemantic・階層、DXFは2D line・block・textをsceneへ対応付ける設計が先に必要なため、後続段階で扱います。
-- OBJのMTLマテリアルは未対応です。
-- Draco、KTX2 / Basis、Meshoptなど、追加decoderを必要とするglTF圧縮・texture形式は未対応です。
-- STEPはExperimentalです。現在のWorker tessellation経路ではassembly階層、名称、色、元マテリアルを単一meshへflattenし、警告を表示します。
-- 読み込み階層は表示用です。子node単位の選択・Transform・表示切替・マテリアル変更には未対応です。
-- PLY point cloudとFBX lineは選択・表示・Transformできますが、Custom PBRマテリアルの上書き対象外で、読み込み時の`PointsMaterial` / line materialを維持します。
-- glTF / FBX / DAE animationはruntimeへ読み込みますが、再生UIはありません。
-- 読み込んだThree.js assetはブラウザメモリだけに保持します。SceneModelのimport recordだけではモデルを復元できず、ページ再読み込み後は再importが必要です。
-- main threadで解析するGLB / glTF、FBX、DAE（各sidecarを含む）、OBJ、STL、PLYは、UI停止を避けるため選択ファイル合計32 MiBまでです。STEPはWorkerで解析し、入力128 MiB、出力200万頂点・200万triangleまでに制限します。
-- binary FBXはLoaderを作成する前にnode / property / depth、圧縮配列の宣言展開量とstreaming実展開量、圧縮比を検査します。
-- DAEはDOCTYPE / ENTITY、過大なXML要素数・汎用markup深さをDOM構築前に拒否し、`instance_node`参照と過大なscene node数・深さをLoader作成前に拒否します。
-- 3MFは圧縮archive 16 MiB、4,096 entry、1 entryの展開後8 MiB、展開後合計128 MiB、圧縮比200:1を上限とし、ZIP64を受け付けません。全entryのstreaming実展開量を測定して宣言値との完全一致も要求します。XMLはDOM構築前に100,000要素・深さ256へ制限し、DOCTYPE / ENTITYを拒否します。
-- Experimental 3MFは単一のroot `3D/*.model` partだけに対応し、multi-part、model relationship part、texture resourceを明示的に拒否します。
-- PLY / FBX / DAE / 3MFの解析結果は50,000 scene node、深さ256、10,000 renderable、200万position vertex、200万vertex reference、200万primitiveまでです。
-- 大規模モデル向けのLOD、mesh簡略化、永続cache、streaming importは未実装です。
+- STEPのassembly階層、part名、色、元材質はflattenされます。CAD topologyは保持しません。
+- 3MFのmulti-part・texture resource、DAEのX_UP、3DM／IGES／BREP／IFC／DXFは未対応です。
+- GLB／glTF、FBX、DAE、OBJ、STL、PLYは入力合計32 MiBまで。STEPは入力128 MiB・出力200万頂点／triangleまで。展開・geometry・画像には別の上限があります。
+- 解析後の上限検査だけでは解析中のピークメモリを保証しません。全形式のWorker化、streaming import、LOD、mesh簡略化、BVH、複数clipの同時再生は実装していません。
+- GPU統計はrenderer.infoの件数です。正確なGPU容量やモデルの軽量化効果を示す測定値ではありません。
+- procedural pattern、積層texture、media、caustics、subsurface、厳密なray tracing等のPOV-Ray効果はWebGLでは再現しません。
+- WebKit自動試験は実機Safariの互換保証ではありません。対象端末のGPU・WASM対応は別途確認してください。
 
-## 表示と言語の設定
+## プライバシー
 
-ヘッダー右側のボタンから表示言語、テーマ、簡易マニュアルを操作できます。
-言語とテーマはブラウザ内に保存され、次回アクセス時に復元されます。
-初回の既定値は日本語・ダークテーマです。
+選択したモデル、MTL・buffer・画像sidecar、材質画像、HDRはブラウザ内で処理し、アプリから外部サーバーへアップロードしません。`.rv3d`とIndexedDBは元ファイルのbytesを含みます。`localStorage`は言語・テーマに使用します。
 
-## プライバシーと外部通信
+HTTP(S)等の外部model resource URIを拒否し、ローカルファイルとして選択した参照を解決します。decoder／transcoder／WASMはPagesのbase配下に同梱し、外部CDN・API・Analyticsを使用しません。利用者が公式資料リンクを開いた場合はそのサイトへアクセスします。
 
-- 選択したモデル本体、ローカルsidecar、およびマテリアル画像はブラウザのメモリ内で処理し、アプリから外部サーバーへアップロードしません。
-- `localStorage`は表示言語とテーマの保存にだけ使用します。
-- Analytics、Cookie、外部API、外部CDNは使用していません。
-- `.gltf`、FBX、DAE内のHTTP(S)など外部resource URIは読み込みを拒否します。参照resourceはローカルファイルとして本体と同時に選択してください。
-- 対応状況一覧の公式資料リンクを利用者が開いた場合に限り、ブラウザがリンク先のPOV-Ray公式サイトへアクセスします。シーンデータは送信しません。
+## ローカル実行・検証
 
-## ローカル実行
-
-Node.js 22を推奨します（対応範囲はNode.js 18 / 20 / 22以上です）。
+Node.js 22を推奨します。
 
 ```bash
 npm ci
 npm run dev
 ```
 
-Viteが表示する `/Render-Viewer-3D/` のURLをブラウザで開いてください。
-
-### STEPのブラウザ要件
-
-通常のThree.js表示に加えて、STEPではWASM SIMD、tail calls、WASM exception handlingが
-必要です。`occt-wasm` 4.3.1がkernel読込を確認している最小バージョンはChrome / Edge
-114、Safari 17.2、Firefox 121です。要件を満たさないブラウザでは、GLB / glTF、OBJ、STLを
-使用するか、STEPを事前に変換してください。
-
-## ビルドとプレビュー
+Viteの`/Render-Viewer-3D/`を開きます。インストール済みThree.jsが参照するdecoder／transcoder資産をViteがPagesのbase配下へ出力します。GLTFLoaderとdecoder JSは必要時に遅延読込し、外部CDNや追加の手動コピーは使いません。
 
 ```bash
 npm test
@@ -194,49 +114,39 @@ npm run build
 npm run preview
 ```
 
-`npm test` はScene Storeの不変性、オブジェクト編集コマンド、Geometry生成、
-マテリアルプリセットと管理コマンド、SceneModel v1からv2への移行、ライブラリ検索、
-Three.js材質への投影、共有リソースの再利用・破棄、IORのプレビュー制限、ローカル画像の
-header / 容量 / 寸法検証、非同期競合、テクスチャmappingと解放、TransformControls操作中の
-モデル同期に加え、Importer選択、単位・座標・原点の正規化、glTF sidecar解決、
-FBX / DAE sidecar待機・解放、PLY mesh / point cloud、FBX / DAEの単位・軸・animation、
-FBX binary配列と3MFのZIP / XML preflight、DAE / 3MFの実fixture、共通geometry budget、OBJ / STL / STEP変換、
-import record、runtime assetの再利用・破棄、マテリアル切替、Camera Auto Fitを検証します。DAE / 3MFの
-importer unit / preflight / fixture testでは、Node.jsに`DOMParser`を提供するdev/test-only依存としてlinkedomを使用します。
-`npm run build` はprebuildでTypeScriptの型検査を実行後、`dist/`へ静的ファイルを生成します。
-GitHub Pagesのプロジェクトパスに合わせ、Viteの`base`は`/Render-Viewer-3D/`です。
+`npm test`は`scripts/test.mjs`が`tests/*.test.mjs`を自動検出します。モデル・履歴・保存形式・UI cache・材質・Importer・resource解放等を検証し、`npm run build`は型検査後に`dist/`を生成します。
+
+実ブラウザの検証は任意の開発用コマンドとして実行できます。ブラウザのダウンロードとローカルserver起動が必要です。
+
+```bash
+npx playwright install chromium firefox webkit
+npm run test:e2e
+# 1種類だけの場合
+npm run test:e2e -- --project=chromium
+```
+
+STEPではWASM SIMD、tail calls、WASM exception handlingが必要です。上流`occt-wasm` 4.3.1のkernel読込確認の最小版はChrome／Edge 114、Safari 17.2、Firefox 121です。この版情報は本アプリの全機能・全端末保証を意味しません。
+
+[実装・検証マトリクス](./docs/IMPLEMENTATION_VALIDATION.md)／[元の調査・作業計画](./docs/REFACTORING_AND_FEATURE_PLAN.md)
 
 ## デプロイ
 
-Pull Requestではテストと型検査・ビルドを実行します。`main`ブランチへのpushでは、
-検証に加えてPages artifactのアップロードと`github-pages` environmentへのデプロイを行います。
+GitHub Actionsの使用量を抑えるため、検証workflowは`workflow_dispatch`による手動起動のみです。PR作成・更新では自動実行しません。レビュー・テスト・型検査・ビルドはローカルで行い、`main`へのmerge後はPages公開workflowを実行します。Pages workflowは配布に必要なinstall・test・buildとartifactの公開を含みます。
 
 ## 構成
 
 ```text
 src/
-├─ app/                 # アプリケーションの組み立て、Scene Store、import制御
-├─ importers/           # Registry、ImportManager、形式別Importer、共通正規化
-├─ model/               # JSON化可能なSceneModel、不変Snapshot、初期シーン
-│  └─ material/        # マテリアルモデル、プリセット、操作、移行、対応状況カタログ
-├─ three/               # Viewport、SceneGraph、runtime import assetのAdapter
-│  └─ material/        # MeshPhysicalMaterialへの投影、共有runtime、環境反射
-├─ ui/                  # 3ペインUI、import UI、マテリアルライブラリ
+├─ app/          # Store、履歴、project形式、復元、自動保存、import・画像制御
+├─ importers/    # Registry、形式別解析、preflight、decoder、Worker、正規化
+├─ model/        # JSON化できるSceneModel、material、root/node編集コマンド
+├─ three/        # 描画要求、scene adapter、asset所有、animation、export、環境
+├─ ui/           # shell、dialog、tree、inspector、material list/detail、各tools
 ├─ main.ts
 └─ styles.css
 ```
 
-Three.jsのSceneは永続データの正本にせず、JSON化可能なSceneModelを正本として扱います。
-Storeは深くfreezeしたSnapshotを公開し、SceneGraph AdapterがモデルのIDと型を基準に
-Three.jsリソースをreconcileします。現在はSceneModelをファイルへ保存するUIはありません。
-import recordはJSON化できますが、実体のObject3D、Geometry、Material、Textureは
-`ImportedAssetStore`がruntime assetとして別に所有します。このためimport recordだけを保存しても
-外部モデルは復元できません。
-
-ローカルカラーマップも同じ境界を守り、SceneModelにはJSON化可能なasset ID、元ファイル情報、
-寸法、mapping設定だけを保存します。デコード済み画像とThree.jsのSource / Textureはruntimeの
-`MaterialImageAssetStore`と`MaterialRuntimeCache`が所有し、差替え、削除、アプリ終了時に
-明示的に解放します。SceneModelのdescriptorだけでは画像実体を復元できません。
+SceneModelを正本とし、Immerの構造共有とdeep freezeで不変Snapshotを公開します。Three.js resourceはruntime storeが別に所有し、現在のシーン・履歴・進行中処理の参照に応じて保持・解放します。元ファイルはproject asset領域が保持し、保存時にdescriptorとbytesをまとめます。
 
 ## POV-Rayとの関係
 

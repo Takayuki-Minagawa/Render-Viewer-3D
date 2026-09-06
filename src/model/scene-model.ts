@@ -103,6 +103,9 @@ export interface DirectionalLightModel {
 export type LightModel = AmbientLightModel | DirectionalLightModel;
 
 export interface CameraModel {
+  up?: Vec3Model;
+  projection?: "perspective" | "orthographic";
+  orthographicHeight?: number;
   position: Vec3Model;
   target: Vec3Model;
   fov: number;
@@ -111,6 +114,8 @@ export interface CameraModel {
 }
 
 export interface SceneModel {
+  exposure?: number;
+  environment?: { assetId: string; name: string } | null;
   schemaVersion: 2;
   name: string;
   backgroundColor: string;

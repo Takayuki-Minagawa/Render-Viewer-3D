@@ -266,9 +266,41 @@ function disposeMaterialResources(
 }
 
 /** Disposes a parsed-but-unpublished Three.js tree after an import failure. */
-export function disposeLoadedObject(root: THREE.Object3D): void {
+export function disposeLoadedObject(root: THREE.Object3D, retainedRoots: readonly THREE.Object3D[] = []): void {
   const disposed = new Set<object>();
   const closedImages = new Set<object>();
+  // glTF scenes can share geometry/material/image identities. An unused scene
+  // may be discarded only after protecting resources owned by the active one.
+  const protectImage = (image: unknown): void => {
+    if (Array.isArray(image)) { for (const value of image) protectImage(value); }
+    else if (image && typeof image === "object") closedImages.add(image);
+  };
+  const protectTexture = (texture: THREE.Texture): void => {
+    disposed.add(texture); protectImage(texture.image); protectImage(texture.source.data);
+  };
+  const protectedNodes = new Set<THREE.Object3D>();
+  const toProtect = [...retainedRoots];
+  while (toProtect.length) {
+    const node = toProtect.pop()!;
+    if (protectedNodes.has(node)) continue;
+    protectedNodes.add(node); disposed.add(node);
+    const mesh = node as THREE.Mesh;
+    if (mesh.geometry) disposed.add(mesh.geometry);
+    for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      if (!material) continue;
+      disposed.add(material);
+      for (const value of Object.values(material)) if ((value as THREE.Texture | null)?.isTexture) protectTexture(value);
+      const uniforms = (material as THREE.ShaderMaterial).uniforms;
+      for (const uniform of Object.values(uniforms ?? {})) {
+        for (const value of Array.isArray(uniform.value) ? uniform.value : [uniform.value]) if ((value as THREE.Texture | null)?.isTexture) protectTexture(value);
+      }
+    }
+    const skeleton = (node as THREE.SkinnedMesh).skeleton;
+    if (skeleton) { disposed.add(skeleton); if (skeleton.boneTexture) protectTexture(skeleton.boneTexture); }
+    const morph = (node as THREE.InstancedMesh).morphTexture;
+    if (morph) protectTexture(morph);
+    toProtect.push(...node.children);
+  }
 
   const visited = new Set<THREE.Object3D>();
   const pending: THREE.Object3D[] = [root];
@@ -297,7 +329,7 @@ export function disposeLoadedObject(root: THREE.Object3D): void {
       skeleton?: THREE.Skeleton;
     };
     if (skinned.isSkinnedMesh && skinned.skeleton) {
-      if (skinned.skeleton.boneTexture) {
+      if (skinned.skeleton.boneTexture && !disposed.has(skinned.skeleton)) {
         disposeTexture(
           skinned.skeleton.boneTexture,
           disposed,
@@ -314,7 +346,7 @@ export function disposeLoadedObject(root: THREE.Object3D): void {
       dispose?: () => void;
     };
     if (instanced.isInstancedMesh) {
-      if (instanced.morphTexture) {
+      if (instanced.morphTexture && !disposed.has(instanced)) {
         disposeTexture(instanced.morphTexture, disposed, closedImages);
         instanced.morphTexture = null;
       }

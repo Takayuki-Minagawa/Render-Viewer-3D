@@ -86,6 +86,8 @@ describe("ImportManager and importer registry", () => {
     assert.equal(IMPORT_FILE_ACCEPT, manager.accept);
     assert.deepEqual(IMPORT_RESOURCE_EXTENSIONS, [
       "bin",
+      "mtl",
+      "ktx2",
       "png",
       "jpg",
       "jpeg",
@@ -96,7 +98,7 @@ describe("ImportManager and importer registry", () => {
     ]);
     assert.equal(
       IMPORT_FILE_INPUT_ACCEPT,
-      `${manager.accept},.bin,.png,.jpg,.jpeg,.webp,.tga,.bmp,.gif`,
+      `${manager.accept},.bin,.mtl,.ktx2,.png,.jpg,.jpeg,.webp,.tga,.bmp,.gif`,
     );
     assert.equal(
       getImportFileInputAccept([importerRegistry[0]], ["BIN", ".png", ""]),

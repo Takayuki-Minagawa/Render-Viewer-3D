@@ -384,8 +384,10 @@ describe("MaterialImageAssetStore validation and budgets", () => {
         premultiplyAlpha: "none",
         colorSpaceConversion: "default",
       });
+      await store.importFile(file, true);
+      assert.equal(capturedOptions.colorSpaceConversion, "none");
       store.dispose();
-      assert.equal(decoded.closeCount, 1);
+      assert.equal(decoded.closeCount, 2);
     } finally {
       if (hadOwn) globalThis.createImageBitmap = original;
       else delete globalThis.createImageBitmap;

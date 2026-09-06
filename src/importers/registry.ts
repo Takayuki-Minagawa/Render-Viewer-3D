@@ -10,6 +10,8 @@ import type { ModelImporter } from "./types";
 
 export const IMPORT_RESOURCE_EXTENSIONS = Object.freeze([
   "bin",
+  "mtl",
+  "ktx2",
   "png",
   "jpg",
   "jpeg",

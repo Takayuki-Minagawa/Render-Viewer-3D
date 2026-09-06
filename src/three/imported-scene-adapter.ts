@@ -30,11 +30,17 @@ interface ResolvedImportedMaterialRuntime {
   readonly uvProfile: ImportedAssetUvProfile;
 }
 
+interface ImportedNodeRuntime {
+  readonly object: THREE.Object3D;
+  readonly originalVisible: boolean;
+}
+
 interface ImportedSceneEntry {
   readonly assetId: string;
   readonly asset: ImportedAssetRuntime;
   readonly rootSignature: string;
   readonly materialSignature: string;
+  readonly nodeVisibilitySignature: string;
   readonly materialRuntime?: ResolvedImportedMaterialRuntime;
 }
 
@@ -44,6 +50,7 @@ export class ImportedSceneAdapter {
   readonly #materials: MaterialRuntimeCache;
   readonly #ownsMaterials: boolean;
   readonly #entries = new Map<string, ImportedSceneEntry>();
+  readonly #nodeProfiles = new WeakMap<ImportedAssetRuntime, Map<string, ImportedNodeRuntime>>();
   readonly #uvProfiles = new WeakMap<
     ImportedAssetRuntime,
     ImportedAssetUvProfile
@@ -82,11 +89,13 @@ export class ImportedSceneAdapter {
       if (asset.root.parent !== this.#scene) this.#scene.add(asset.root);
       const rootSignature = importedRootSignature(model);
       const materialRuntime = this.#resolveMaterialRuntime(asset, model);
+      const nodeMaterials = this.#resolveNodeMaterials(asset, model);
       const materialSignature = importedMaterialSignature(
         model,
         materialDefinitions,
-        Boolean(materialRuntime?.texturedMaterial.map),
-      );
+        Boolean(materialRuntime && hasMaterialMaps(materialRuntime.texturedMaterial)),
+      ) + JSON.stringify([...nodeMaterials].map(([id, runtime]) => [id, runtime.texturedMaterial.uuid, runtime.fallbackMaterial.uuid]));
+      const nodeVisibilitySignature = JSON.stringify([model.isolatedNodeId, Object.entries(model.nodeOverrides ?? {}).map(([id, override]) => [id, override.visible])]);
       this.#applyImportedScene(
         asset,
         model,
@@ -94,12 +103,15 @@ export class ImportedSceneAdapter {
         rootSignature,
         materialSignature,
         materialRuntime,
+        nodeMaterials,
+        nodeVisibilitySignature,
       );
       nextEntries.set(model.id, {
         assetId: model.assetId,
         asset,
         rootSignature,
         materialSignature,
+        nodeVisibilitySignature,
         materialRuntime,
       });
     }
@@ -170,6 +182,12 @@ export class ImportedSceneAdapter {
       }
       resolved.set(model.id, asset);
 
+      for (const [nodeId, override] of Object.entries(model.nodeOverrides ?? {})) {
+        if (!this.#getNodeProfile(asset).has(nodeId)) throw new Error(`Missing imported node: ${nodeId}`);
+        if (override.materialId && !materialIds.has(override.materialId)) throw new Error(`Missing material id for imported node ${nodeId}: ${override.materialId}`);
+      }
+      if (model.isolatedNodeId && !this.#getNodeProfile(asset).has(model.isolatedNodeId)) throw new Error(`Missing isolated imported node: ${model.isolatedNodeId}`);
+
       if (model.materialMode === "custom") {
         if (!model.customMaterialId) {
           throw new Error(
@@ -201,7 +219,7 @@ export class ImportedSceneAdapter {
     const uvProfile = this.#getUvProfile(asset);
     const defaultMaterial = this.#materials.requireMaterial(materialId);
     const fallbackMaterial =
-      uvProfile.hasMissingTextureCoordinates && defaultMaterial.map
+      uvProfile.hasMissingTextureCoordinates && hasMaterialMaps(defaultMaterial)
         ? this.#materials.requireUntexturedMaterial(materialId)
         : defaultMaterial;
     const texturedMaterial = uvProfile.hasUsableTextureCoordinates
@@ -247,6 +265,8 @@ export class ImportedSceneAdapter {
     rootSignature: string,
     materialSignature: string,
     materialRuntime: ResolvedImportedMaterialRuntime | undefined,
+    nodeMaterials: ReadonlyMap<string, ResolvedImportedMaterialRuntime>,
+    nodeVisibilitySignature: string,
   ): void {
     const prior = previous?.asset === asset ? previous : undefined;
     const { root } = asset;
@@ -256,6 +276,10 @@ export class ImportedSceneAdapter {
       asset.forEachRenderable((object) => {
         object.userData.sceneModelId = model.id;
       });
+      for (const [nodeId, { object }] of this.#getNodeProfile(asset)) {
+        object.userData.sceneModelId = model.id;
+        object.userData.importedNodeId = nodeId;
+      }
     }
 
     if (!prior || prior.rootSignature !== rootSignature) {
@@ -276,6 +300,14 @@ export class ImportedSceneAdapter {
         model.transform.scale.y,
         model.transform.scale.z,
       );
+    }
+
+    if (!prior || prior.nodeVisibilitySignature !== nodeVisibilitySignature) {
+      for (const [id, node] of this.#getNodeProfile(asset)) {
+        const isolate = model.isolatedNodeId;
+        const related = !isolate || id === isolate || id.startsWith(`${isolate}-`) || isolate.startsWith(`${id}-`);
+        node.object.visible = related && (model.nodeOverrides?.[id]?.visible ?? node.originalVisible);
+      }
     }
 
     const resolvedMaterialChanged =
@@ -302,7 +334,40 @@ export class ImportedSceneAdapter {
             : materialRuntime.fallbackMaterial;
         }
       }
+      // Parent overrides apply first; a more specific child override wins.
+      for (const [nodeId, runtime] of [...nodeMaterials].sort(([a], [b]) => a.split("-").length - b.split("-").length)) {
+        const node = this.#getNodeProfile(asset).get(nodeId)!;
+        node.object.traverse((object) => {
+          if (!(object instanceof THREE.Mesh)) return;
+          object.material = runtime.uvProfile.usableMeshes.has(object)
+            ? runtime.texturedMaterial : runtime.fallbackMaterial;
+        });
+      }
     }
+  }
+
+  #getNodeProfile(asset: ImportedAssetRuntime): Map<string, ImportedNodeRuntime> {
+    const cached = this.#nodeProfiles.get(asset);
+    if (cached) return cached;
+    const profile = new Map<string, ImportedNodeRuntime>();
+    const pending = asset.sourceRoot.children.map((object, index) => ({ object, id: `node-${index}` }));
+    while (pending.length) {
+      const { object, id } = pending.pop()!;
+      profile.set(id, { object, originalVisible: object.visible });
+      object.children.forEach((child, index) => pending.push({ object: child, id: `${id}-${index}` }));
+    }
+    this.#nodeProfiles.set(asset, profile);
+    return profile;
+  }
+
+  #resolveNodeMaterials(asset: ImportedAssetRuntime, model: ImportedSceneSnapshot): Map<string, ResolvedImportedMaterialRuntime> {
+    const runtimes = new Map<string, ResolvedImportedMaterialRuntime>();
+    for (const [nodeId, override] of Object.entries(model.nodeOverrides ?? {})) {
+      if (!override.materialId) continue;
+      const runtime = this.#resolveMaterialRuntime(asset, { ...model, materialMode: "custom", customMaterialId: override.materialId });
+      if (runtime) runtimes.set(nodeId, runtime);
+    }
+    return runtimes;
   }
 }
 
@@ -335,8 +400,12 @@ function importedMaterialSignature(
     model.materialMode,
     model.customMaterialId,
     customMaterial?.colorMap?.assetId ?? null,
+    customMaterial?.maps,
     runtimeHasColorMap,
     textureUvOriginForFormat(model.format),
+    Object.entries(model.nodeOverrides ?? {}).map(([id, override]) => [id, override.materialId,
+      materialDefinitions.find(material => material.id === override.materialId)?.colorMap?.assetId,
+      materialDefinitions.find(material => material.id === override.materialId)?.maps]),
   ]);
 }
 
@@ -368,4 +437,8 @@ function isEffectivelyVisible(
     current = current.parent;
   }
   return false;
+}
+
+function hasMaterialMaps(material: THREE.MeshPhysicalMaterial): boolean {
+  return Boolean(material.map || material.normalMap || material.roughnessMap || material.metalnessMap || material.aoMap);
 }

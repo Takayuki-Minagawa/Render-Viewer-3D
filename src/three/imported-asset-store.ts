@@ -144,12 +144,45 @@ export class ImportedAssetRuntime {
 }
 
 export class ImportedAssetStore {
+  #retained = new Set<string>();
+  readonly #deferredDeletes = new Set<string>();
   readonly #assets = new Map<string, ImportedAssetRuntime>();
   readonly #assetResources = new Map<string, Set<object>>();
   readonly #ownedResources = new Set<object>();
 
   get size(): number {
     return this.#assets.size;
+  }
+
+  ids(): readonly string[] { return [...this.#assets.keys()]; }
+
+  setRetainedIds(ids: ReadonlySet<string>): void {
+    this.#retained = new Set(ids);
+    for (const id of this.#deferredDeletes) {
+      if (!this.#retained.has(id)) this.delete(id);
+    }
+  }
+
+  estimatedBytes(assetId: string): number {
+    const resources = this.#assetResources.get(assetId);
+    if (!resources) return 0;
+    let bytes = 0;
+    const arrays = new Set<ArrayBufferLike>();
+    for (const resource of resources) {
+      if (resource instanceof THREE.BufferGeometry) {
+        const attributes = [...Object.values(resource.attributes), resource.index];
+        for (const attribute of attributes) {
+          if (!attribute) continue;
+          const array = attribute instanceof THREE.InterleavedBufferAttribute ? attribute.data.array : (attribute as THREE.BufferAttribute).array;
+          if (!ArrayBuffer.isView(array)) continue;
+          if (!arrays.has(array.buffer)) { arrays.add(array.buffer); bytes += array.byteLength * 2; }
+        }
+      } else if (resource instanceof THREE.Texture) {
+        const image = resource.image as { width?: number; height?: number } | undefined;
+        bytes += (image?.width ?? 0) * (image?.height ?? 0) * 4 * 8 / 3;
+      }
+    }
+    return bytes;
   }
 
   register(assetId: string, sourceRoot: THREE.Object3D): ImportedAssetRuntime {
@@ -191,6 +224,8 @@ export class ImportedAssetStore {
   }
 
   delete(assetId: string): boolean {
+    if (this.#retained.has(assetId)) { this.#deferredDeletes.add(assetId); return false; }
+    this.#deferredDeletes.delete(assetId);
     const asset = this.#assets.get(assetId);
     if (!asset) return false;
     const resources = this.#assetResources.get(assetId) ?? new Set<object>();
@@ -207,6 +242,7 @@ export class ImportedAssetStore {
   }
 
   dispose(): void {
+    this.#retained.clear();
     for (const assetId of [...this.#assets.keys()]) this.delete(assetId);
   }
 }

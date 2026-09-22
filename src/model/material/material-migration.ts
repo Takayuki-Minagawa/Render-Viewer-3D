@@ -6,6 +6,7 @@ import {
   createDefaultPhysicalMaterialPreview,
   createMaterialDefinitionFromPreview,
 } from "./material-presets";
+import { createReviewModel } from "../review-model";
 
 export interface LegacyMaterialModelV1 {
   color: string;
@@ -22,18 +23,22 @@ export type LegacySceneObjectModelV1 = Omit<
 
 export type LegacySceneModelV1 = Omit<
   SceneModel,
-  "schemaVersion" | "imports" | "materials" | "objects"
+  "schemaVersion" | "imports" | "materials" | "objects" | "review"
 > & {
   schemaVersion: 1;
   objects: LegacySceneObjectModelV1[];
 };
 
+export type LegacySceneModelV2 = Omit<SceneModel, "schemaVersion" | "review"> & { schemaVersion: 2 };
+
 export function migrateSceneModel(
-  source: SceneModel | LegacySceneModelV1,
+  source: SceneModel | LegacySceneModelV1 | LegacySceneModelV2,
 ): SceneModel {
   const schemaVersion = (source as { schemaVersion: number }).schemaVersion;
-  if (schemaVersion === 2) {
+  if (schemaVersion === 2 || schemaVersion === 3) {
     const current = structuredClone(source as SceneModel);
+    current.schemaVersion = 3;
+    if (schemaVersion === 2) current.review = createReviewModel();
     current.imports ??= [];
     for (const material of current.materials) material.colorMap ??= null;
     return current;
@@ -79,14 +84,15 @@ export function migrateSceneModel(
   return {
     ...legacy,
     imports: [],
-    schemaVersion: 2,
+    schemaVersion: 3,
+    review: createReviewModel(),
     materials,
     objects,
   };
 }
 
 export function isLegacySceneModelV1(
-  scene: SceneModel | LegacySceneModelV1,
+  scene: SceneModel | LegacySceneModelV1 | LegacySceneModelV2,
 ): scene is LegacySceneModelV1 {
   return scene.schemaVersion === 1;
 }

@@ -1,3 +1,7 @@
+import { ReviewController } from "./review-controller";
+import { ReviewPanel } from "../ui/review-panel";
+import { ReviewOverlay } from "../ui/review-overlay";
+import { AssetToolsPanel } from "../ui/asset-tools-panel";
 import { ImportManager } from "../importers";
 import { createDefaultSceneModel } from "../model/default-scene";
 import {
@@ -118,9 +122,16 @@ export function createApplication(root: HTMLElement): Application {
       return { commit() { committed = true; environmentTarget = assetId; environmentGeneration++; adapter.setEnvironment(texture); }, dispose() { if (!committed) texture?.dispose(); } };
     };
     const projects = new ProjectController(root, store, editorStore, importManager, importedAssets, materialImages, projectAssets, history, prepareEnvironment);
+    const reviewViewport = adapter.getReviewViewport();
+    reviewViewport.getSelectedNodeId = () => nodeTools?.selectedNodeId ?? null;
+    const review = new ReviewController(store, reviewViewport, { canEdit: () => !projects.busy });
+    const reviewPanel = new ReviewPanel(root.querySelector<HTMLElement>(".scene-panel") ?? shell.viewportElement, review);
+    const reviewOverlay = new ReviewOverlay(shell.viewportElement, review);
+    adapter.setReviewHandlers({ pick: anchor => review.pick(anchor), preview: anchor => review.preview(anchor), refresh: () => review.refresh(), cancel: () => review.cancel() });
+    const assetTools = new AssetToolsPanel(adapter.panelsContainer, { exportGlb: async () => (await adapter.exportGlb()).arrayBuffer() });
     const pbrMaps = new MaterialPbrMapController(store, materialImages);
     const mapTools = new MaterialMapTools(root.querySelector<HTMLElement>(".inspector-panel") ?? shell.viewportElement, store, pbrMaps, operation => projects.editAsync(operation));
-    const appearance = new AppearanceTools(shell.viewportElement, store, {
+    const appearance = new AppearanceTools(adapter.panelsContainer, store, {
       onEnvironmentFile: (file) => projects.editAsync(async () => {
         const id = file ? `environment-${crypto.randomUUID()}` : null;
         const prepared = await prepareEnvironment(file, id);
@@ -140,6 +151,7 @@ export function createApplication(root: HTMLElement): Application {
       const locale = document.documentElement.lang === "en" ? "en" : "ja";
       adapter.setLocale(locale); projects.setLocale(locale);
       appearance.setLocale(locale);
+      reviewPanel.setLocale(locale); assetTools.setLocale(locale);
       mapTools.setLocale(locale);
       nodeTools?.update(store.getSnapshot(), editorStore.getSnapshot().selectedObjectId, locale);
     };
@@ -369,12 +381,14 @@ export function createApplication(root: HTMLElement): Application {
 
     shell.setReady();
     if (import.meta.env.DEV) {
-      Object.assign(window, { __viewer: { store, adapter, projects, history, importedAssets, materialImages, projectAssets, editorStore } });
+      Object.assign(window, { __viewer: { store, adapter, projects, history, importedAssets, materialImages, projectAssets, editorStore, review } });
     }
     return {
       dispose: () => {
         disposed = true;
         environmentGeneration++;
+        adapter.setReviewHandlers(undefined);
+        reviewOverlay.dispose(); reviewPanel.dispose(); review.dispose(); assetTools.dispose();
         appearance.dispose();
         mapTools.dispose();
         pbrMaps.dispose();

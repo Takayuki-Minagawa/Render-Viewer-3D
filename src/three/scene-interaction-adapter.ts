@@ -8,6 +8,8 @@ import type { SceneGraphAdapter } from "./scene-graph-adapter";
 interface SceneInteractionOptions {
   onImportedNodeSelected?: (rootId: string, nodeId: string) => void;
   onRenderRequested?: () => void;
+  surfacePickingActive?: () => boolean;
+  onSurfaceHover?: (intersection: THREE.Intersection | undefined) => void;
   onSurfacePicked?: (intersection: THREE.Intersection | undefined) => boolean;
   isPointVisible?: (point: THREE.Vector3) => boolean;
   onObjectSelected: (objectId: string | null) => void;
@@ -198,6 +200,10 @@ export class SceneInteractionAdapter {
         event.preventDefault(); event.stopImmediatePropagation();
       }
     }, { ...options, capture: true });
+    this.#canvas.addEventListener("pointermove", event => {
+      if (this.#options.surfacePickingActive?.() && event.buttons === 0) this.#options.onSurfaceHover?.(this.#intersectionAt(event));
+    }, options);
+    this.#canvas.addEventListener("pointerleave", () => this.#options.onSurfaceHover?.(undefined), options);
     this.#canvas.addEventListener(
       "pointerdown",
       (event) => {
@@ -361,22 +367,21 @@ export class SceneInteractionAdapter {
     const distance = Math.hypot(event.clientX - start.x, event.clientY - start.y);
     if (distance > 4) return;
 
-    const bounds = this.#canvas.getBoundingClientRect();
-    if (bounds.width <= 0 || bounds.height <= 0) return;
-    this.#pointer.set(
-      ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
-      -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
-    );
-    this.#raycaster.setFromCamera(this.#pointer, this.#camera);
-    const intersection = this.#raycaster.intersectObjects(
-      this.#graph.getPickableObjects(),
-      false,
-    ).find((hit) => this.#options.isPointVisible?.(hit.point) !== false);
+    const intersection = this.#intersectionAt(event);
     if (this.#options.onSurfacePicked?.(intersection)) return;
     const rootId = intersection?.object.userData.sceneModelId as string | undefined;
     this.#options.onObjectSelected(rootId ?? null);
     const nodeId = intersection?.object.userData.importedNodeId as string | undefined;
     if (rootId && nodeId) this.#options.onImportedNodeSelected?.(rootId, nodeId);
+  }
+
+  #intersectionAt(event: Pick<PointerEvent, "clientX" | "clientY">): THREE.Intersection | undefined {
+    const bounds = this.#canvas.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return undefined;
+    this.#pointer.set(((event.clientX - bounds.left) / bounds.width) * 2 - 1, -((event.clientY - bounds.top) / bounds.height) * 2 + 1);
+    this.#raycaster.setFromCamera(this.#pointer, this.#camera);
+    // Preserve all intersections: the closest hit may have been clipped away.
+    return this.#raycaster.intersectObjects(this.#graph.getPickableObjects(), false).find(hit => this.#options.isPointVisible?.(hit.point) !== false);
   }
 
   #captureTransformModel(object: THREE.Object3D): TransformModel {

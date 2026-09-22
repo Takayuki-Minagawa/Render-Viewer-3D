@@ -17,7 +17,7 @@ export function appShellTemplate(): string {
 
         <main class="workspace">
           <aside class="panel scene-panel" data-i18n-aria-label="scene.panelLabel">
-            <div class="panel-heading scene-heading"><div><span class="eyebrow" data-i18n="scene.eyebrow">シーンモデル</span><h1 data-i18n="scene.title">シーン</h1></div><span class="schema-badge">JSON v2</span></div>
+            <div class="panel-heading scene-heading"><div><span class="eyebrow" data-i18n="scene.eyebrow">シーンモデル</span><h1 data-i18n="scene.title">シーン</h1></div><span class="schema-badge">JSON v3</span></div>
             <details class="primitive-menu">
               <summary data-i18n-aria-label="scene.addObjectLabel"><i aria-hidden="true">＋</i><span data-i18n="scene.addObject">オブジェクト追加</span><b aria-hidden="true">⌄</b></summary>
               <div class="primitive-grid">

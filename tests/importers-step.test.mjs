@@ -38,6 +38,7 @@ function primaryFile() {
 function options(overrides = {}) {
   return {
     ...DEFAULT_IMPORT_OPTIONS,
+    stepStructure: "flat",
     centerModel: false,
     placeOnGround: false,
     ...overrides,

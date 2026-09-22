@@ -10,7 +10,7 @@ export default defineConfig({
     // STEP reaches Comlink through an excluded WASM package after first import.
     // Prebundle it up front to avoid a dependency-discovery page reload.
     noDiscovery: unitTests,
-    include: unitTests ? [] : ["comlink"],
+    include: unitTests ? [] : ["comlink", "gltf-validator", "@gltf-transform/core", "@gltf-transform/extensions", "@gltf-transform/functions"],
     exclude: ["occt-wasm", "three/addons/loaders/DRACOLoader.js", "three/addons/loaders/KTX2Loader.js"],
   },
   base: "/Render-Viewer-3D/",

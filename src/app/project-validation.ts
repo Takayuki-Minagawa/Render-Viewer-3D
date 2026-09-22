@@ -2,6 +2,7 @@ import { createDefaultSceneModel } from "../model/default-scene";
 import { migrateSceneModel } from "../model/material/material-migration";
 import { normalizeMaterialColorMap } from "../model/material/material-color-map";
 import type { SceneModel } from "../model/scene-model";
+import { validateReviewModel } from "./review-validation";
 
 type RecordValue = Record<string, unknown>;
 export function record(value: unknown): RecordValue {
@@ -61,13 +62,14 @@ function shape(value: unknown, template: unknown): void {
 export function validateScene(source: unknown): SceneModel {
   validateJsonTree(source);
   const raw = record(source);
-  if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) throw new Error("Unsupported scene version.");
+  if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3) throw new Error("Unsupported scene version.");
   // Validate legacy material leaves before migration accesses them.
   if (raw.schemaVersion === 1) for (const object of list(raw.objects)) {
     const material = record(record(object).material); color(material.color); number(material.metalness, 0, 1); number(material.roughness, 0, 1);
   }
   const model = migrateSceneModel(raw as unknown as SceneModel);
   const defaults = createDefaultSceneModel();
+  validateReviewModel(model.review);
   text(model.name); color(model.backgroundColor); bool(model.shadowsEnabled);
   if (model.exposure !== undefined) number(model.exposure, 0, 10);
   if (model.environment != null) { text(record(model.environment).assetId); text(record(model.environment).name); }

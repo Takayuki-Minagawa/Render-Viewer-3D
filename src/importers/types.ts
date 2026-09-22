@@ -18,6 +18,8 @@ export interface ImportOptions {
   centerModel: boolean;
   placeOnGround: boolean;
   quality: TriangulationQuality;
+  /** Legacy saved projects explicitly select flat; new STEP imports preserve assemblies. */
+  stepStructure?: "flat" | "assembly";
   signal?: AbortSignal;
 }
 
@@ -27,6 +29,7 @@ export const DEFAULT_IMPORT_OPTIONS: Readonly<ImportOptions> = Object.freeze({
   centerModel: true,
   placeOnGround: true,
   quality: "medium",
+  stepStructure: "assembly",
 });
 
 export interface ImportWarning {

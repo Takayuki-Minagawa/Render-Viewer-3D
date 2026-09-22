@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
 export interface PngExportOptions {
   width: number;
@@ -7,6 +6,10 @@ export interface PngExportOptions {
   transparent?: boolean;
   includeHelpers?: boolean;
 }
+type ExportCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+// Three retains transmission targets by camera.id. Reusing cameras bounds those
+// renderer-owned targets even when a glass scene is exported repeatedly.
+const exportCameras = new WeakMap<THREE.WebGLRenderer, Map<string, ExportCamera>>();
 export const PNG_MAX_EDGE = 4096;
 export const PNG_MAX_PIXELS = 16_777_216;
 
@@ -18,8 +21,11 @@ export function validatePngSize(width: number, height: number, gpuLimit = PNG_MA
 }
 
 /** Preserve vertical framing; a different aspect ratio reveals/crops the sides. */
-export function createPngCamera(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera, width: number, height: number): THREE.PerspectiveCamera | THREE.OrthographicCamera {
-  const copy = camera.clone();
+export function createPngCamera(camera: ExportCamera, width: number, height: number, cached?: ExportCamera): ExportCamera {
+  const copy = cached ?? camera.clone();
+  if (copy instanceof THREE.PerspectiveCamera && camera instanceof THREE.PerspectiveCamera) copy.copy(camera, false);
+  else if (copy instanceof THREE.OrthographicCamera && camera instanceof THREE.OrthographicCamera) copy.copy(camera, false);
+  else throw new Error("PNG camera projection mismatch.");
   if (copy instanceof THREE.PerspectiveCamera) copy.aspect = width / height;
   else {
     const halfWidth = (copy.top - copy.bottom) * width / height / 2;
@@ -30,77 +36,54 @@ export function createPngCamera(camera: THREE.PerspectiveCamera | THREE.Orthogra
   return copy;
 }
 
-/** Render/read synchronously: the live scene is restored before PNG encoding yields. */
+/** Capture synchronously before restoring the live drawing buffer. Using the
+ * renderer's canvas preserves its per-material tone mapping/blending order,
+ * including toneMapped=false helpers and overlapping transparent materials.
+ * The renderer must have been constructed with alpha:true.
+ */
 export function renderPng(
   renderer: THREE.WebGLRenderer,
   scene: THREE.Scene,
-  camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+  camera: ExportCamera,
   helpers: readonly THREE.Object3D[],
   options: PngExportOptions,
   render: (camera: THREE.Camera) => void = camera => renderer.render(scene, camera),
 ): Promise<Blob> {
   const gl = renderer.getContext();
   validatePngSize(options.width, options.height, Math.min(renderer.capabilities.maxTextureSize, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number));
-  if (!renderer.extensions.has("EXT_color_buffer_float")) throw new Error("PNG: this GPU does not support the floating-point export buffer.");
+  if (options.transparent && !gl.getContextAttributes()?.alpha) throw new Error("PNG: transparent output requires an alpha-enabled renderer.");
   const { width, height } = options;
-  // 8-byte linear HDR color + depth/stencil + 4-byte output + CPU/canvas buffers.
-  // No MSAA: a bounded memory cost independent of the device's sample count.
-  const linear = new THREE.WebGLRenderTarget(width, height, { type: THREE.HalfFloatType, stencilBuffer: true });
-  const output = new THREE.WebGLRenderTarget(width, height, { depthBuffer: false });
-  const pass = new OutputPass();
-  // Render targets contain premultiplied linear color. PNG requires straight alpha.
-  pass.material.fragmentShader = pass.material.fragmentShader.replace(
-    "gl_FragColor = texture2D( tDiffuse, vUv );",
-    "gl_FragColor = texture2D( tDiffuse, vUv ); if (gl_FragColor.a > 0.0) gl_FragColor.rgb /= gl_FragColor.a;",
-  );
   const previous = {
     target: renderer.getRenderTarget(), face: renderer.getActiveCubeFace(), level: renderer.getActiveMipmapLevel(),
     viewport: renderer.getViewport(new THREE.Vector4()), scissor: renderer.getScissor(new THREE.Vector4()),
     scissorTest: renderer.getScissorTest(), clear: renderer.getClearColor(new THREE.Color()), alpha: renderer.getClearAlpha(),
-    autoClear: renderer.autoClear, background: scene.background, clipping: renderer.clippingPlanes,
+    autoClear: renderer.autoClear, background: scene.background,
+    size: renderer.getSize(new THREE.Vector2()), pixelRatio: renderer.getPixelRatio(),
     helpers: helpers.map(helper => helper.visible),
   };
-  const pixels = new Uint8Array(width * height * 4);
-  const canvas = document.createElement("canvas");
   try {
-    canvas.width = width; canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("PNG: unable to create image buffer.");
     if (!options.includeHelpers) helpers.forEach(helper => { helper.visible = false; });
-    // Keep HDR lighting, but composite the background after tone mapping, just as
-    // the display renderer treats a Color background (it is not tone mapped).
-    scene.background = null; renderer.setClearColor(0x000000, 0);
-    renderer.autoClear = true; renderer.setScissorTest(false); renderer.setRenderTarget(linear);
-    render(createPngCamera(camera, width, height));
-    renderer.clippingPlanes = [];
-    pass.render(renderer, output, linear, 0, false);
-    renderer.readRenderTargetPixels(output, 0, 0, width, height, pixels);
-    const image = context.createImageData(width, height);
-    const background = previous.background instanceof THREE.Color ? previous.background.clone().convertLinearToSRGB() : previous.clear.clone().convertLinearToSRGB();
-    const rgb = [background.r * 255, background.g * 255, background.b * 255];
-    for (let y = 0; y < height; y++) {
-      const src = (height - 1 - y) * width * 4;
-      const dst = y * width * 4;
-      image.data.set(pixels.subarray(src, src + width * 4), dst);
-      if (!options.transparent) {
-        for (let x = 0; x < width; x++) {
-          const i = dst + x * 4, a = image.data[i + 3]! / 255;
-          for (let c = 0; c < 3; c++) image.data[i + c] = image.data[i + c]! * a + rgb[c]! * (1 - a);
-          image.data[i + 3] = 255;
-        }
-      }
-    }
-    context.putImageData(image, 0, 0);
+    if (options.transparent) { scene.background = null; renderer.setClearColor(0x000000, 0); }
+    renderer.autoClear = true; renderer.setRenderTarget(null); renderer.setScissorTest(false);
+    renderer.setPixelRatio(1); renderer.setSize(width, height, false);
+    let cameras = exportCameras.get(renderer);
+    if (!cameras) { cameras = new Map(); exportCameras.set(renderer, cameras); }
+    const exportCamera = createPngCamera(camera, width, height, cameras.get(camera.type));
+    cameras.set(camera.type, exportCamera);
+    render(exportCamera);
+    // HTMLCanvasElement.toBlob snapshots its bitmap at the call, even though
+    // encoding completes asynchronously after the finally block restores it.
+    return new Promise<Blob>((resolve, reject) => renderer.domElement.toBlob(blob => {
+      if (blob) resolve(blob); else reject(new Error("PNG encoding failed."));
+    }, "image/png"));
   } finally {
     helpers.forEach((helper, i) => { helper.visible = previous.helpers[i]!; });
-    scene.background = previous.background; renderer.clippingPlanes = previous.clipping;
+    scene.background = previous.background;
     renderer.setClearColor(previous.clear, previous.alpha); renderer.autoClear = previous.autoClear;
+    // Restore logical size first: reversing this order could allocate an export
+    // width multiplied by the display pixel ratio, exceeding the checked limit.
+    renderer.setSize(previous.size.x, previous.size.y, false); renderer.setPixelRatio(previous.pixelRatio);
     renderer.setRenderTarget(previous.target, previous.face, previous.level);
     renderer.setViewport(previous.viewport); renderer.setScissor(previous.scissor); renderer.setScissorTest(previous.scissorTest);
-    linear.dispose(); output.dispose(); pass.dispose();
   }
-  return new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => {
-    canvas.width = 1; canvas.height = 1;
-    if (blob) resolve(blob); else reject(new Error("PNG encoding failed."));
-  }, "image/png"));
 }

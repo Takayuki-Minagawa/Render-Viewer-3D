@@ -3,7 +3,7 @@ import type { ReviewAnchor, ReviewBounds } from "../model/review-model";
 import type { DeepReadonly, Vec3Model } from "../model/scene-model";
 
 const fingerprints = new WeakMap<THREE.BufferGeometry, { positions: unknown; index: unknown; version: number; indexVersion: number; key: string }>();
-const boundsCache = new WeakMap<THREE.Mesh, { positions: unknown; version: number; matrix: number[]; bounds: THREE.Box3 }>();
+const boundsCache = new WeakMap<THREE.Mesh, { positions: unknown; version: number; index: unknown; indexVersion: number; rangesKey: string; matrix: number[]; bounds: THREE.Box3 }>();
 const plain = (v: THREE.Vector3): Vec3Model => ({ x: v.x, y: v.y, z: v.z });
 
 function staticMesh(object: THREE.Object3D): object is THREE.Mesh {
@@ -60,7 +60,9 @@ export function createReviewAnchor(intersection: THREE.Intersection | undefined)
   if (typeof rootId !== "string" || !reviewObjectVisible(mesh)) return null;
   mesh.updateWorldMatrix(true, false);
   const nodeId = mesh.userData.importedNodeId as string | undefined;
-  return { rootId, ...(nodeId ? { nodeId } : {}), localPosition: plain(mesh.worldToLocal(intersection.point.clone())), geometryKey: bindingKey(mesh, rootId) };
+  const localPosition = plain(mesh.worldToLocal(intersection.point.clone()));
+  if (!Object.values(localPosition).every(value => Number.isFinite(value) && Math.abs(value) <= 1e9)) return null;
+  return { rootId, ...(nodeId ? { nodeId } : {}), localPosition, geometryKey: bindingKey(mesh, rootId) };
 }
 /** Returns null on missing/replaced geometry and unsupported animated surfaces. */
 export function resolveReviewAnchor(root: THREE.Object3D | undefined, anchor: DeepReadonly<ReviewAnchor>): Vec3Model | null {
@@ -68,7 +70,8 @@ export function resolveReviewAnchor(root: THREE.Object3D | undefined, anchor: De
   const mesh = target(root, anchor.nodeId);
   if (!mesh || !staticMesh(mesh) || animated(mesh) || bindingKey(mesh, anchor.rootId) !== anchor.geometryKey) return null;
   mesh.updateWorldMatrix(true, false);
-  return plain(mesh.localToWorld(new THREE.Vector3(anchor.localPosition.x, anchor.localPosition.y, anchor.localPosition.z)));
+  const world = plain(mesh.localToWorld(new THREE.Vector3(anchor.localPosition.x, anchor.localPosition.y, anchor.localPosition.z)));
+  return Object.values(world).every(Number.isFinite) ? world : null;
 }
 export function reviewAnchorVisible(root: THREE.Object3D | undefined, anchor: DeepReadonly<ReviewAnchor>): boolean {
   const object = root ? target(root, anchor.nodeId) : null;
@@ -85,14 +88,25 @@ export function reviewBounds(root: THREE.Object3D | undefined, nodeId?: string):
     const position = node.geometry.getAttribute("position");
     if (!position) return;
     const version = position instanceof THREE.InterleavedBufferAttribute ? position.data.version : position.version;
+    const index = node.geometry.index, count = index?.count ?? position.count;
+    const start = Math.max(0, node.geometry.drawRange.start), end = Math.min(count, start + node.geometry.drawRange.count);
+    const ranges: { start: number; end: number }[] = [];
+    if (Array.isArray(node.material)) {
+      for (const group of node.geometry.groups) if (node.material[group.materialIndex ?? 0]?.visible) ranges.push({ start: Math.max(start, group.start), end: Math.min(end, group.start + group.count) });
+    } else if (node.material.visible) ranges.push({ start, end });
+    const rangesKey = JSON.stringify(ranges), indexVersion = index?.version ?? -1;
     const cached = boundsCache.get(node);
-    if (cached?.positions === position && cached.version === version && cached.matrix.every((value, index) => value === node.matrixWorld.elements[index])) { box.union(cached.bounds); return; }
+    if (cached?.positions === position && cached.version === version && cached.index === index && cached.indexVersion === indexVersion && cached.rangesKey === rangesKey && cached.matrix.every((value, i) => value === node.matrixWorld.elements[i])) { box.union(cached.bounds); return; }
     const point = new THREE.Vector3(), bounds = new THREE.Box3();
-    for (let i = 0; i < position.count; i++) bounds.expandByPoint(point.fromBufferAttribute(position, i).applyMatrix4(node.matrixWorld));
-    boundsCache.set(node, { positions: position, version, matrix: [...node.matrixWorld.elements], bounds });
+    // glTF primitives can share a POSITION accessor but reference disjoint
+    // subsets. Count only complete rendered triangles, not unused vertices.
+    for (const range of ranges) for (let offset = range.start; offset + 2 < range.end; offset += 3) for (let j = 0; j < 3; j++) {
+      bounds.expandByPoint(point.fromBufferAttribute(position, index ? index.getX(offset + j) : offset + j).applyMatrix4(node.matrixWorld));
+    }
+    boundsCache.set(node, { positions: position, version, index, indexVersion, rangesKey, matrix: [...node.matrixWorld.elements], bounds });
     box.union(bounds);
   });
-  return box.isEmpty() ? null : { min: plain(box.min), max: plain(box.max) };
+  return box.isEmpty() || ![...box.min.toArray(), ...box.max.toArray()].every(Number.isFinite) ? null : { min: plain(box.min), max: plain(box.max) };
 }
 /** Snap only to visible vertices of the picked triangle, within a screen-space radius. */
 export function snapReviewIntersection(intersection: THREE.Intersection | undefined, camera: THREE.Camera,

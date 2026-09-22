@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
 export interface SectionCapStatus { eligible: number; skipped: number }
-const closureCache = new WeakMap<THREE.BufferGeometry, { version: string; closed: boolean }>();
+const closureCache = new WeakMap<THREE.BufferGeometry, { positions: unknown; index: unknown; version: string; closed: boolean }>();
 const MAX_CAP_TRIANGLES = 200_000;
 
 /** Conservative eligibility: closed, consistently wound triangles only. */
@@ -13,7 +13,7 @@ export function isClosedGeometry(geometry: THREE.BufferGeometry): boolean {
   if (count % 3 || count / 3 > MAX_CAP_TRIANGLES || geometry.drawRange.start !== 0 || geometry.drawRange.count < count) return false;
   const version = `${(position instanceof THREE.InterleavedBufferAttribute ? position.data.version : position.version)}:${index?.version ?? 0}:${position.count}:${count}`;
   const cached = closureCache.get(geometry);
-  if (cached?.version === version) return cached.closed;
+  if (cached?.positions === position && cached.index === index && cached.version === version) return cached.closed;
   const vertices = new Map<string, number>();
   const ids: number[] = [];
   const edges = new Map<string, { count: number; winding: number }>();
@@ -38,14 +38,24 @@ export function isClosedGeometry(geometry: THREE.BufferGeometry): boolean {
     }
   }
   const closed = triangles > 0 && [...edges.values()].every(edge => edge.count === 2 && edge.winding === 0);
-  closureCache.set(geometry, { version, closed });
+  closureCache.set(geometry, { positions: position, index, version, closed });
   return closed;
 }
 
 export function canCapMesh(object: THREE.Object3D): object is THREE.Mesh {
   if (!(object instanceof THREE.Mesh) || object instanceof THREE.SkinnedMesh || object instanceof THREE.InstancedMesh || Object.keys(object.geometry.morphAttributes).length) return false;
   const materials = Array.isArray(object.material) ? object.material : [object.material];
-  return materials.every(m => m.visible && !m.transparent && m.opacity === 1 && m.alphaTest === 0 && !m.alphaHash) && isClosedGeometry(object.geometry);
+  if (Array.isArray(object.material)) {
+    // The stencil pass uses one material. Reject missing or overlapping groups
+    // so it never closes faces that the actual mesh does not draw.
+    let end = 0;
+    for (const group of [...object.geometry.groups].sort((a, b) => a.start - b.start)) {
+      if (group.start !== end || !materials[group.materialIndex ?? 0]) return false;
+      end += group.count;
+    }
+    if (end !== (object.geometry.index?.count ?? object.geometry.getAttribute("position")?.count)) return false;
+  }
+  return materials.every(m => !(m instanceof THREE.MeshPhysicalMaterial && m.transmission > 0) && m.visible && !m.transparent && m.opacity === 1 && m.alphaTest === 0 && !m.alphaHash) && isClosedGeometry(object.geometry);
 }
 
 /** A display-only stencil pass. Borrowed geometry is never modified or disposed. */

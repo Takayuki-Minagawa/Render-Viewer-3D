@@ -25,3 +25,11 @@ test('cap accepts welded closed boxes and spheres, skips open/transparent/animat
   box.setDrawRange(0,3);assert.equal(isClosedGeometry(box),false);
   assert.equal(canCapMesh(new THREE.SkinnedMesh(new THREE.BoxGeometry(),new THREE.MeshBasicMaterial())),false);
 });
+
+test('cap excludes transmission even with opaque blending and rejects incomplete material groups',()=>{
+  const box=new THREE.BoxGeometry(), glass=new THREE.MeshPhysicalMaterial({transmission:1,transparent:false,opacity:1});
+  assert.equal(canCapMesh(new THREE.Mesh(box,glass)),false);glass.transmission=0;
+  const solid=new THREE.Mesh(box,[glass]);box.groups.forEach(group=>{group.materialIndex=0;});assert.equal(canCapMesh(solid),true);
+  box.groups.pop();assert.equal(canCapMesh(solid),false);
+  box.dispose();glass.dispose();
+});

@@ -166,3 +166,32 @@ test('new STEP captures assembly explicitly while legacy project options restore
   const decoded = await decodeProject(await encodeProject(h.store.getSnapshot(),h.sources,h.images)); assert.equal(decoded.imports.get('cad').options.stepStructure,'flat');
   h.dispose();
 });
+
+test('world bounds count rendered indices, draw ranges and visible material groups, invalidating the cache', () => {
+  const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0, 100,0,0, 101,0,0, 100,1,0],3));
+  g.setIndex([0,1,2]);const m = new THREE.Mesh(g,new THREE.MeshBasicMaterial());
+  assert.equal(geometry.reviewBounds(m).max.x,1);
+  g.setIndex([0,1,2,3,4,5]);assert.equal(geometry.reviewBounds(m).max.x,101);
+  g.setDrawRange(0,3);assert.equal(geometry.reviewBounds(m).max.x,1);
+  g.setDrawRange(3,3);assert.equal(geometry.reviewBounds(m).min.x,100);
+  g.setDrawRange(0,6);g.addGroup(0,3,0);g.addGroup(3,3,1);
+  const left=m.material,right=new THREE.MeshBasicMaterial({visible:false});m.material=[left,right];
+  assert.equal(geometry.reviewBounds(m).max.x,1);right.visible=true;assert.equal(geometry.reviewBounds(m).max.x,101);
+  g.index.setX(3,0);g.index.setX(4,1);g.index.setX(5,2);g.index.needsUpdate=true;
+  assert.equal(geometry.reviewBounds(m).max.x,1);
+  g.dispose();left.dispose();right.dispose();
+});
+
+test('non-finite geometry and oversized anchor coordinates cannot poison saved review state', () => {
+  const h=harness();h.mesh.geometry.attributes.position.setX(0,NaN);h.mesh.geometry.attributes.position.needsUpdate=true;
+  assert.equal(geometry.reviewBounds(h.mesh),null);assert.throws(()=>h.controller.addBounds('Invalid'));
+  assert.equal(geometry.createReviewAnchor({object:h.mesh,point:new THREE.Vector3(NaN,0,0)}),null);
+  assert.equal(geometry.createReviewAnchor({object:h.mesh,point:new THREE.Vector3(1e12,0,0)}),null);
+  assert.equal(h.store.getSnapshot().review.measurements.length,0);h.dispose();
+});
+
+test('saved view camera validation uses the same up limits as the active camera', () => {
+  const h=harness();h.controller.saveView('View');const invalid=structuredClone(h.store.getSnapshot());
+  invalid.review.views[0].camera.up={x:0,y:2,z:0};assert.throws(()=>validateScene(invalid));
+  invalid.review.views[0].camera.up={x:0,y:1,z:0};assert.doesNotThrow(()=>validateScene(invalid));h.dispose();
+});

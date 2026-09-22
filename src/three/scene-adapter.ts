@@ -46,6 +46,7 @@ type View = "front" | "back" | "left" | "right" | "top" | "bottom" | "isometric"
 export class SceneAdapter {
   readonly #scene = new THREE.Scene();
   #camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  readonly #projectionCameras = new Map<string, THREE.PerspectiveCamera | THREE.OrthographicCamera>();
   readonly #renderer: THREE.WebGLRenderer;
   readonly #environment: NeutralEnvironment;
   #controls: OrbitControls;
@@ -88,6 +89,7 @@ export class SceneAdapter {
     this.#pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
     this.#onCameraInteractionEnd = options.onCameraInteractionEnd;
     this.#camera = new THREE.PerspectiveCamera(model.camera.fov, 1, model.camera.near, model.camera.far);
+    this.#projectionCameras.set("perspective", this.#camera);
     this.#renderer = this.#createRenderer();
     this.#renderer.shadowMap.enabled = model.shadowsEnabled;
     configureGLTFRenderer(this.#renderer);
@@ -247,7 +249,13 @@ export class SceneAdapter {
     const helpers = [this.#grid, this.#axes, this.#measurement, this.#points, ...this.#interaction.getHelpers()];
     const width = options?.width ?? this.#renderer.domElement.width;
     const height = options?.height ?? this.#renderer.domElement.height;
-    try { return await renderPng(this.#renderer, this.#scene, this.#camera, helpers, { ...options, width, height, includeHelpers }, camera => this.#renderScene(camera)); }
+    try {
+      const encoded = renderPng(this.#renderer, this.#scene, this.#camera, helpers, { ...options, width, height, includeHelpers }, camera => this.#renderScene(camera));
+      // The synchronous capture has already restored (and resized) the canvas.
+      // Redraw now, while encoding is still pending, so idle scenes stay visible.
+      this.requestRender();
+      return await encoded;
+    }
     finally { this.requestRender(); }
   }
   async exportGlb(): Promise<Blob> {
@@ -270,7 +278,7 @@ export class SceneAdapter {
     this.panelsContainer.remove(); this.#scene.environment = null; this.#ownedEnvironment?.dispose(); this.#environment.dispose(); this.#renderer.dispose(); this.#renderer.domElement.remove();
   }
   #createRenderer(): THREE.WebGLRenderer {
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, stencil: true, powerPreference: "high-performance" });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, stencil: true, powerPreference: "high-performance" });
     renderer.domElement.className = "viewport-canvas"; renderer.domElement.tabIndex = 0;
     renderer.domElement.setAttribute("aria-label", "3D viewport: drag to orbit, right drag to pan, wheel to zoom");
     renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
@@ -288,7 +296,8 @@ export class SceneAdapter {
     if ((this.#camera instanceof THREE.OrthographicCamera) === (projection === "orthographic")) return;
     const old = this.#camera;
     if (projection === "orthographic") this.#orthographicHeight = 2 * old.position.distanceTo(this.#controls.target) * Math.tan(THREE.MathUtils.degToRad(this.#fov / 2));
-    this.#camera = projection === "orthographic" ? new THREE.OrthographicCamera() : new THREE.PerspectiveCamera(this.#fov);
+    this.#camera = this.#projectionCameras.get(projection) ?? (projection === "orthographic" ? new THREE.OrthographicCamera() : new THREE.PerspectiveCamera(this.#fov));
+    this.#projectionCameras.set(projection, this.#camera); this.#camera.zoom = 1;
     this.#camera.position.copy(old.position); this.#camera.quaternion.copy(old.quaternion); this.#camera.up.copy(old.up);
     this.#camera.near = old.near; this.#camera.far = old.far;
     this.#controls.object = this.#camera; this.#interaction.setCamera(this.#camera); this.#updateProjection(); this.#controls.update();

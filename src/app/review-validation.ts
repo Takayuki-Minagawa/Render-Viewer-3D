@@ -18,7 +18,7 @@ function array(value: unknown, max = REVIEW_ITEM_LIMIT): unknown[] {
   if (!Array.isArray(value) || value.length > max) throw new Error("Review item limit exceeded.");
   return value;
 }
-function vector(value: unknown): void { const v = object(value); number(v.x); number(v.y); number(v.z); }
+function vector(value: unknown, min = -1e9, max = 1e9): void { const v = object(value); number(v.x, min, max); number(v.y, min, max); number(v.z, min, max); }
 function anchor(value: unknown): void {
   const a = object(value); string(a.rootId, 4096); if (a.nodeId !== undefined) string(a.nodeId, 4096);
   string(a.geometryKey, 512); vector(a.localPosition);
@@ -28,7 +28,7 @@ function camera(value: unknown): void {
   const near = number(c.near, 1e-6); number(c.far, near + 1e-6);
   if (c.projection !== undefined && c.projection !== "perspective" && c.projection !== "orthographic") throw new Error("Invalid review projection.");
   if (c.orthographicHeight !== undefined) number(c.orthographicHeight, 1e-6);
-  if (c.up !== undefined) { vector(c.up); const up = object(c.up); if (Number(up.x) ** 2 + Number(up.y) ** 2 + Number(up.z) ** 2 < 1e-12) throw new Error("Invalid review camera up."); }
+  if (c.up !== undefined) { vector(c.up, -1, 1); const up = object(c.up); if (Number(up.x) ** 2 + Number(up.y) ** 2 + Number(up.z) ** 2 < 1e-12) throw new Error("Invalid review camera up."); }
 }
 /** Missing objects are deliberately allowed: orphaned notes remain editable and undoable. */
 export function validateReviewModel(value: unknown): void {

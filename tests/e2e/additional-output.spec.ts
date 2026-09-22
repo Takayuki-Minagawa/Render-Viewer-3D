@@ -44,3 +44,36 @@ test('section cap changes only the closed mesh cut, survives reverse and transpa
   expect(result.open[3]).toBe(0);expect(result.cap[3]).toBe(255);expect(result.cap[0]).toBeGreaterThan(200);expect(result.cap[1]).toBeLessThan(40);
   expect(result.reverse[3]).toBe(255);expect(result.restored[3]).toBe(255);
 });
+
+test('transmission PNG and repeated projection changes retain a bounded number of textures',async({page})=>{
+  await page.goto('./');await expect(page.locator('.viewport-canvas')).toBeVisible();
+  const counts=await page.evaluate(async()=>{
+    const {adapter,store}=(window as any).__viewer;
+    store.update((d:any)=>{const material=d.materials.find((m:any)=>m.id===d.objects[0].materialId);material.preview.transmission=1;material.preview.transparent=true;});
+    const samples=[];
+    for(let i=0;i<12;i++) {
+      store.update((d:any)=>{d.camera.projection=i%2?'orthographic':'perspective';},{history:false});
+      await new Promise(requestAnimationFrame);
+      await adapter.exportPng(false,{width:128,height:128,transparent:true});samples.push(adapter.getResourceCounts().textures);
+    }
+    return samples;
+  });
+  expect(new Set(counts.slice(3)).size).toBe(1);
+});
+
+test('the viewport redraws while PNG encoding is pending',async({page})=>{
+  await page.goto('./');await expect(page.locator('.viewport-canvas')).toBeVisible();
+  const result=await page.evaluate(async()=>{
+    const {adapter}=(window as any).__viewer;
+    await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
+    const canvas=document.querySelector('.viewport-canvas') as HTMLCanvasElement, original=canvas.toBlob.bind(canvas);
+    let release:()=>void=()=>{},captured:()=>void=()=>{};
+    const capturedPromise=new Promise<void>(resolve=>{captured=resolve;});
+    canvas.toBlob=(callback,type,quality)=>original(blob=>{release=()=>callback(blob);captured();},type,quality);
+    const before=adapter.getRenderCount(), pending=adapter.exportPng(false,{width:128,height:128});
+    await capturedPromise;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
+    const repainted=adapter.getRenderCount()>before;release();await pending;canvas.toBlob=original;
+    return repainted;
+  });
+  expect(result).toBe(true);
+});

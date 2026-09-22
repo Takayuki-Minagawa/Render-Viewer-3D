@@ -7,7 +7,7 @@
 | 対象 | 結果 |
 | --- | --- |
 | W0：運用 | 検証workflowを削除。GitHub Actionsは手動のPages公開のみ。独立のテストjobやPR/push起動を設置しない |
-| W1／F1：PNG | 任意解像度・Full HD・4K・透過背景・縦横比固定。HDR線形target→tone mapping・sRGB→PNG。通常描画と一時資源を復元 |
+| W1／F1：PNG | 任意解像度・Full HD・4K・透過背景・縦横比固定。alpha対応rendererの出力bufferを同期captureし、画面と同じtone mapping・blend順序を維持。描画設定を復元 |
 | W2／F2：レビュー | 複数視点、camera／clip／cap／表示／隔離、静的mesh上の注記、再取付、Undo、project／autosaveへの保存。schema 1／2→3移行 |
 | W3／F6：glTF診断 | Khronos Validatorを遅延Workerで実行。選択済みローカルresourceだけを解決。JSONレポート、件数／容量／時間制限、取消 |
 | W4／F3：計測 | 複数距離・3点角度・world AABB、頂点スナップ、名称／単位／削除、project／Undo。表示位置と値は現在のtransformから算出 |
@@ -23,9 +23,11 @@
 - 注記・距離・角度はroot ID／node ID／local座標／geometry fingerprintを保存し、runtime asset IDを参照キーにしません。参照切れは非表示・未解決とし、Undoや注記の再取付で復旧します。
 - 静的surfaceの計測でありskin／morph・animation surface追従は対象外です。外形寸法はworld AABBです。
 - capは閉じたmeshの検査を通る形状だけに適用し、検査費用を抑えるため1mesh 20万triangleまで。CADの切断geometryは生成しません。
-- PNGは最大4096×4096。GPUのtexture／renderbuffer上限も検査します。linear HDR target・出力target・CPU／canvasが必要で、上限での実機GPU動作を一律保証するものではありません。
+- PNGは最大4096×4096。GPUのtexture／renderbuffer上限も検査します。描画buffer・depth/stencil・MSAA・PNG encodingの作業領域が必要で、上限での実機GPU動作を一律保証するものではありません。出力cameraはrendererごとに投影別で再利用し、ガラス材質の内部textureが出力ごとに蓄積しないようにします。
 - glTF診断と整理は新規Workerを処理ごとに作り、取消・30秒timeout・完了時に終了します。入力のbyte列を元sceneと分離し、外部URIは取得しません。
 - 過去の[実装・検証記録](./IMPLEMENTATION_VALIDATION.md)にあるCI運用は当時の履歴です。現在はPages公開以外のGitHub Actionsを使用しません。
+
+PNGは当初の「linear render target＋出力postprocess」案から変更しました。半透明の重なりとtoneMapped無効の補助表示で画面との色差が確認されたためです。renderer生成時からalphaを有効にし、出力用cameraと指定解像度で通常と同じ描画経路を使います。`toBlob`が同期取得するbitmapを利用し、encodingの完了を待たずに画面サイズ・pixel ratio・背景・補助表示を復元します。
 
 ## 選択処理の測定とBVH採否
 

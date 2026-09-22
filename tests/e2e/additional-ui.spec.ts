@@ -15,6 +15,10 @@ test('PNG presets and transparent export work through the published UI',async({p
     const context=canvas.getContext('2d')!;context.drawImage(image,0,0);image.close();return context.getImageData(0,0,1,1).data[3];
   },Array.from(bytes));
   expect(alpha).toBe(0);await expect(page.locator('[data-vt=png]')).toBeEnabled();
+  await page.locator('[data-vt=png-size]').selectOption('2160');
+  const fourK=page.waitForEvent('download');await page.locator('[data-vt=png]').click();
+  const large=await readFile((await (await fourK).path())!);
+  expect([large.readUInt32BE(16),large.readUInt32BE(20)]).toEqual([3840,2160]);
 });
 
 test('review views and world bounds persist through the published UI',async({page})=>{

@@ -12,9 +12,11 @@ TypeScript・Three.js・Viteによる、ブラウザ内で3Dプリミティブ�
 - ローカル画像によるbase color／normal／roughness／metalness／AOマップ、繰返し・オフセット・回転・端処理。
 - `.rv3d`プロジェクト保存・復元とIndexedDB自動保存。元モデル、sidecar、材質画像、HDR環境も保存。
 - Undo／Redo。数値・名称入力、slider、gizmoの連続操作をまとめ、Escで編集中の操作を取消。
-- 現在のViewport解像度でPNG出力、標準mesh・材質・animationのGLB出力。
+- 画面サイズ・Full HD・4K・任意解像度のPNG出力と透明背景、標準mesh・材質・animationのGLB出力。
 - 透視／正投影、正面・背面・左右・上下・斜めの標準視点、選択物を画面に収めるFit。
-- 蓋なし断面表示、mesh表面の2点間距離計測。内部単位はm、表示はmm／cm／m。
+- 単一軸の断面と切断面の色付け、複数の距離・角度・外形寸法と頂点スナップ。内部単位はm、表示はmm／cm／m。
+- 名前付き視点、部品に付ける注記、計測結果を`.rv3d`に保存。
+- ローカルglTF/GLBと現在シーンの診断、JSONレポート、数値データを整理したGLBコピーの出力。
 - 読込モデルの子node選択、表示指定、隔離、子孫へ継承する材質上書き。
 - 読込clipの選択、再生・一時停止・解除、シーク、速度変更。
 - Ambient／Directional Lightの色・強度・位置、露出、ローカルRadiance RGBE `.hdr`環境の編集。
@@ -58,9 +60,9 @@ ImportボタンまたはViewportへのドラッグ＆ドロップを使います
 | FBX | `.fbx` | Experimental。階層、材質、animation、ローカルtexture、宣言単位と軸を正規化。 |
 | COLLADA | `.dae` | Experimental。階層、材質、animation、ローカルsidecar。unitとY_UP／Z_UPを正規化。 |
 | 3MF | `.3mf` | Experimental。単一root model partのunit、mesh、材質。multi-part・texture resourceは未対応。 |
-| STEP / STP | `.step`, `.stp` | Experimental。Open CASCADE WASMをWorkerで実行し、B-Repから単一triangle meshへ変換。 |
+| STEP / STP | `.step`, `.stp` | Experimental。Open CASCADE WASMをWorkerで実行し、B-Repを三角形化。assembly階層・名称・部品色・配置を保持。 |
 
-アプリ内部はmeter／Y-upです。AutoはglTFをmeter／Y-up、STEPをmillimeterとして扱い、FBX・DAE・3MFでは対応する宣言値を使います。不明なOBJ／STL／PLYの単位・軸はmeter／Y-upと仮定して警告します。正規化はimport rootへ一度だけ適用します。
+アプリ内部はmeter／Y-upです。AutoはglTFをmeter／Y-up、STEPは宣言単位をカーネルで正規化し、FBX・DAE・3MFでは対応する宣言値を使います。不明なOBJ／STL／PLYの単位・軸はmeter／Y-upと仮定して警告します。編集用rootへの正規化は一度だけ適用します。
 
 rootの名称・Transform・表示・削除と、子nodeの選択・表示・隔離・材質変更を分けています。子nodeのlocal Transform編集は提供しません。子node IDは元階層の子indexパスです。親の材質指定は子孫へ適用され、より具体的な子の指定が優先します。指定解除で親／rootのImported・Custom材質へ戻り、表示指定解除で元の表示状態へ戻ります。Points／LineはPBR材質上書き対象外です。
 
@@ -68,9 +70,17 @@ rootの名称・Transform・表示・削除と、子nodeの選択・表示・隔
 
 ## 出力・計測の範囲
 
-PNGは現在のcanvas解像度で出力し、Grid／Axes／gizmo等の補助表示を含めるか選べます。高解像度指定・透明背景は未対応です。GLBは表示対象のobject・mesh・標準材質・animationを出力し、編集補助表示を除外します。プリミティブの編集パラメータ、POV-Ray概念プロファイル、全アプリ設定を完全に戻す用途には`.rv3d`を使用します。
+PNGは画面サイズ、1920×1080、3840×2160、任意サイズを選べます。一辺4096 px・16 MPとGPU上限の小さい方が上限です。縦横比固定、現在の背景／透明、補助表示の有無を選びます。構図は縦方向の画角を保ち、横幅を出力比率に合わせます。HDR照明を維持して出力時点の静止画を作り、注記・寸法のDOMラベルは合成しません。
 
-断面には切断面の蓋を生成しません。計測はRaycasterによるworld-spaceのmesh表面2点間距離です。STEPも三角形化した面上で計測し、B-Repの厳密寸法・曲面間最短距離は計算しません。計測点、断面、再生位置、描画倍率はViewportの作業中設定で、専用projectに永続化する対象ではありません。標準視点・投影・カメラ、ライト・露出・HDR・影はSceneModelの保存対象です。
+GLBは表示対象のobject・mesh・標準材質・animationを出力し、編集補助表示・断面capを除外します。「glTF診断・軽量化」では選択したglTFとsidecar、または現在シーンのGLBをブラウザ内のWorkerで診断できます。診断入力は1件64 MiB・合計128 MiB・256ファイル、レポートは1,000件、Worker処理は30秒まで。未検証の拡張も表示します。軽量化は自己完結GLBの重複・未使用の数値データを整理し、名前・階層・材質・animationを保持します。元sceneを変更せず、容量が減らない場合は元のGLBを返します。形状簡略化・texture再圧縮、未知／圧縮拡張を含むGLBの変換は対象外です。
+
+断面の色付けは閉じた不透明な静的mesh（1mesh 20万triangle以下）を対象とする表示補助です。開いた形状、半透明、skin／morph等は対象外として件数を表示します。capは選択・計測・GLB出力の対象になりません。断面capとその色は名前付き視点に含められます。
+
+Sceneパネルの「レビュー・計測」から、視点の登録・更新・呼出し・削除、注記の登録・再取付、複数の距離・3点角度・選択部品の外形寸法を利用できます。スナップは選んだ三角形の可視頂点から12px以内を対象にします。外形寸法はワールド軸に沿ったAABBなので回転すると値も変わります。距離・角度は現在のworld transformで再計算します。いずれも三角形化した形状の近似計測で、B-Repの厳密寸法・CAD公差判定には対応しません。
+
+視点・注記・計測は各200件、名称120文字、注記本文1,000文字までです。注記は静的meshに取り付け、削除・geometry変更等で参照が失われると「参照未解決」と表示します。削除はUndo、注記は再取付で復旧できます。登録・編集・削除はUndo対象です。視点呼出しのカメラ移動と断面設定はUndo対象外、表示・隔離の変更はUndo対象です。Scene schema 3を使い、旧schema 1／2から移行します。旧STEP projectのflatten構造は復元時に維持します。
+
+従来の一時的な2点計測、現在の断面・再生位置・描画倍率は作業中の設定です。後から戻したい断面は名前付き視点に、残したい計測はレビュー・計測に登録してください。プリミティブの編集パラメータや全アプリ設定を戻す用途には`.rv3d`を使用します。
 
 ## POV-Ray概念と材質画像
 
@@ -82,7 +92,7 @@ PNG／JPEG／WebPの画像マップは1ファイル16 MiB、一辺4096 px、約1
 
 ## 現在の制限
 
-- STEPのassembly階層、part名、色、元材質はflattenされます。CAD topologyは保持しません。
+- STEPは三角形化された表示モデルです。CAD topologyやB-Repの編集情報を保存しません。元材質の全属性の互換を保証しません。
 - 3MFのmulti-part・texture resource、DAEのX_UP、3DM／IGES／BREP／IFC／DXFは未対応です。
 - GLB／glTF、FBX、DAE、OBJ、STL、PLYは入力合計32 MiBまで。STEPは入力128 MiB・出力200万頂点／triangleまで。展開・geometry・画像には別の上限があります。
 - 解析後の上限検査だけでは解析中のピークメモリを保証しません。全形式のWorker化、streaming import、LOD、mesh簡略化、BVH、複数clipの同時再生は実装していません。
@@ -98,7 +108,7 @@ HTTP(S)等の外部model resource URIを拒否し、ローカルファイルと�
 
 ## ローカル実行・検証
 
-Node.js 22を推奨します。
+Node.js 22以上が必要です。
 
 ```bash
 npm ci
@@ -127,16 +137,17 @@ npm run test:e2e -- --project=chromium
 
 STEPではWASM SIMD、tail calls、WASM exception handlingが必要です。上流`occt-wasm` 4.3.1のkernel読込確認の最小版はChrome／Edge 114、Safari 17.2、Firefox 121です。この版情報は本アプリの全機能・全端末保証を意味しません。
 
-[実装・検証マトリクス](./docs/IMPLEMENTATION_VALIDATION.md)／[元の調査・作業計画](./docs/REFACTORING_AND_FEATURE_PLAN.md)
+[実装・検証マトリクス](./docs/IMPLEMENTATION_VALIDATION.md)／[追加機能と検証・採否記録](./docs/ADDITIONAL_FEATURES.md)
 
 ## デプロイ
 
-GitHub Actionsの使用量を抑えるため、検証workflowは`workflow_dispatch`による手動起動のみです。PR作成・更新では自動実行しません。レビュー・テスト・型検査・ビルドはローカルで行い、`main`へのmerge後はPages公開workflowを実行します。Pages workflowは配布に必要なinstall・test・buildとartifactの公開を含みます。
+GitHub ActionsはGitHub Pagesの公開専用です。テスト・レビュー・ベンチマークはローカルで実行し、検証用workflowは設置しません。PR作成・更新やpushではActionsを起動しません。検証・merge後に`Deploy to GitHub Pages`を`main`に対して手動実行します。公開workflowは配布に必要なinstall・buildとartifactの公開だけを行います。
 
 ## 構成
 
 ```text
 src/
+├─ asset-tools/  # glTF診断・軽量化Worker、local-only resolver接続
 ├─ app/          # Store、履歴、project形式、復元、自動保存、import・画像制御
 ├─ importers/    # Registry、形式別解析、preflight、decoder、Worker、正規化
 ├─ model/        # JSON化できるSceneModel、material、root/node編集コマンド

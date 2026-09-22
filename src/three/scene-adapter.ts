@@ -1,3 +1,6 @@
+import type { ReviewViewport } from "../app/review-controller";
+import type { ReviewAnchor } from "../model/review-model";
+import { createReviewAnchor, resolveReviewAnchor, reviewAnchorVisible, reviewBounds, snapReviewIntersection } from "./review-geometry";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { TransformMode } from "../app/editor-store";
@@ -13,8 +16,11 @@ import { AnimationPlayer } from "./animation-player";
 import { createExportSnapshot, downloadBlob } from "./scene-export";
 import { ViewportTools } from "../ui/viewport-tools";
 import { prepareHdrEnvironment } from "./hdr-environment";
+import { renderPng, type PngExportOptions } from "./png-export";
+import { SectionCapRenderer } from "./section-cap";
 import { configureGLTFRenderer } from "../importers/gltf-decoders";
 
+interface ReviewHandlers { pick: (anchor: ReviewAnchor | null) => boolean; preview: (anchor: ReviewAnchor | null) => void; refresh: () => void; cancel: () => void; }
 interface CameraPose {
   position: Vec3Model;
   target: Vec3Model;
@@ -40,6 +46,7 @@ type View = "front" | "back" | "left" | "right" | "top" | "bottom" | "isometric"
 export class SceneAdapter {
   readonly #scene = new THREE.Scene();
   #camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  readonly #projectionCameras = new Map<string, THREE.PerspectiveCamera | THREE.OrthographicCamera>();
   readonly #renderer: THREE.WebGLRenderer;
   readonly #environment: NeutralEnvironment;
   #controls: OrbitControls;
@@ -49,17 +56,23 @@ export class SceneAdapter {
   readonly #grid = new THREE.GridHelper(24, 24, 0x526078, 0x303846);
   readonly #axes = new THREE.AxesHelper(2.5);
   readonly #container: HTMLElement;
+  readonly panelsContainer = document.createElement("div");
   readonly #onCameraInteractionEnd: (pose: CameraPose) => void;
   readonly #demand: DemandRenderer;
   readonly #player = new AnimationPlayer();
   readonly #abort = new AbortController();
   readonly #measurement = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffd166, depthTest: false }));
   readonly #points = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xffd166, size: 8, sizeAttenuation: false, depthTest: false }));
+  readonly #caps = new SectionCapRenderer();
+  #clipping = { axis: "off" as "off" | "x" | "y" | "z", offset: 0, reverse: false, cap: false, capColor: "#e9a23b" };
   #tools: ViewportTools | undefined;
   #model: SceneSnapshot;
   #selectedId: string | null = null;
   #clipEntries: { root: THREE.Object3D; clip: THREE.AnimationClip }[] = [];
   #measuring = false;
+  #reviewPicking = false;
+  #reviewSnap = false;
+  #reviewHandlers: ReviewHandlers | undefined;
   #measurePoints: THREE.Vector3[] = [];
   #pixelRatio = 2;
   #fov = 45;
@@ -76,6 +89,7 @@ export class SceneAdapter {
     this.#pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
     this.#onCameraInteractionEnd = options.onCameraInteractionEnd;
     this.#camera = new THREE.PerspectiveCamera(model.camera.fov, 1, model.camera.near, model.camera.far);
+    this.#projectionCameras.set("perspective", this.#camera);
     this.#renderer = this.#createRenderer();
     this.#renderer.shadowMap.enabled = model.shadowsEnabled;
     configureGLTFRenderer(this.#renderer);
@@ -91,19 +105,23 @@ export class SceneAdapter {
       onObjectTransformCommitted: options.onObjectTransformCommitted,
       onRenderRequested: () => this.requestRender(),
       isPointVisible: (point) => this.#renderer.clippingPlanes.every((plane) => plane.distanceToPoint(point) >= 0),
-      onSurfacePicked: (intersection) => this.#pickMeasurement(intersection),
+      surfacePickingActive: () => this.#reviewPicking,
+      onSurfaceHover: (intersection) => { if (this.#reviewPicking) this.#reviewHandlers?.preview(this.#reviewAnchor(intersection)); },
+      onSurfacePicked: (intersection) => this.#reviewPicking ? this.#reviewHandlers?.pick(this.#reviewAnchor(intersection)) ?? false : this.#pickMeasurement(intersection),
     });
     this.#measurement.renderOrder = 1001; this.#points.renderOrder = 1002;
     this.#scene.add(this.#grid, this.#axes, this.#measurement, this.#points);
     this.#container.append(this.#renderer.domElement);
-    this.#tools = new ViewportTools(container, {
-      png: async (helpers) => downloadBlob(await this.exportPng(helpers), "render-viewer.png"),
+    this.panelsContainer.className = "viewport-panel-stack";
+    container.append(this.panelsContainer);
+    this.#tools = new ViewportTools(this.panelsContainer, {
+      png: async (helpers, options) => downloadBlob(await this.exportPng(helpers, options), "render-viewer.png"),
       glb: async () => downloadBlob(await this.exportGlb(), "render-viewer.glb"),
       projection: (projection) => { this.#switchProjection(projection); this.#commitCamera(); },
       view: (view) => this.setStandardView(view),
       fit: () => { if (this.#selectedId) this.fitToObject(this.#selectedId); },
-      clipping: (axis, offset, reverse) => this.setClipping(axis, offset, reverse),
-      measure: (enabled) => { this.#measuring = enabled; this.#syncTransformEnabled(); this.requestRender(); },
+      clipping: (axis, offset, reverse, cap, color) => this.setClipping(axis, offset, reverse, cap, color),
+      measure: (enabled) => { this.#reviewHandlers?.cancel(); this.#measuring = enabled; this.#syncTransformEnabled(); this.requestRender(); },
       clearMeasurement: () => this.clearMeasurement(),
       clip: (index) => this.#selectClip(index),
       play: () => { this.#player.play(); this.requestRender(); },
@@ -126,6 +144,31 @@ export class SceneAdapter {
   setLocale(locale: "ja" | "en"): void { this.#tools?.setLocale(locale); }
   setImportDuration(milliseconds: number): void { if (Number.isFinite(milliseconds)) this.#importDuration = milliseconds; this.requestRender(); }
   getRenderCount(): number { return this.#frameCount; }
+  getResourceCounts(): { geometries: number; textures: number } { return { ...this.#renderer.info.memory }; }
+  setReviewHandlers(handlers: ReviewHandlers | undefined): void { this.#reviewHandlers = handlers; }
+  getReviewViewport(): ReviewViewport {
+    return {
+      getClipping: () => ({ ...this.#clipping }),
+      setClipping: state => this.setClipping(state.axis, state.offset, state.reverse, state.cap, state.capColor),
+      resolveAnchor: anchor => resolveReviewAnchor(this.#sceneGraph.getObjectById(anchor.rootId), anchor),
+      isAnchorVisible: anchor => reviewAnchorVisible(this.#sceneGraph.getObjectById(anchor.rootId), anchor),
+      getBounds: (id, node) => reviewBounds(this.#sceneGraph.getObjectById(id), node),
+      projectPoint: point => {
+        const world = new THREE.Vector3(point.x, point.y, point.z), projected = world.clone().project(this.#camera);
+        return { x: (projected.x + 1) * this.#container.clientWidth / 2, y: (1 - projected.y) * this.#container.clientHeight / 2,
+          visible: projected.z >= -1 && projected.z <= 1 && Math.abs(projected.x) <= 1 && Math.abs(projected.y) <= 1 && this.#renderer.clippingPlanes.every(plane => plane.distanceToPoint(world) >= 0) };
+      },
+      setPicking: (active, snap) => {
+        this.#reviewPicking = active; this.#reviewSnap = snap;
+        if (active) { this.#measuring = false; this.#tools?.setMeasuring(false); }
+        this.#syncTransformEnabled(); this.requestRender();
+      },
+      requestRender: () => this.requestRender(), getSelectedRootId: () => this.#selectedId,
+    };
+  }
+  #reviewAnchor(intersection: THREE.Intersection | undefined): ReviewAnchor | null {
+    return createReviewAnchor(this.#reviewSnap ? snapReviewIntersection(intersection, this.#camera, this.#renderer.domElement, this.#renderer.clippingPlanes) : intersection);
+  }
   /** Exposure and environment are preview settings; caller persists descriptors when needed. */
   setExposure(exposure: number): void { if (Number.isFinite(exposure)) this.#renderer.toneMappingExposure = Math.max(0, Math.min(10, exposure)); this.requestRender(); }
   prepareEnvironment(file: File): Promise<THREE.Texture> { return prepareHdrEnvironment(file); }
@@ -188,8 +231,10 @@ export class SceneAdapter {
     this.#replaceControlsForUp();
     this.#camera.lookAt(this.#controls.target); this.#controls.update(); this.#commitCamera(); this.requestRender();
   }
-  setClipping(axis: "off" | "x" | "y" | "z", offset: number, reverse = false): void {
-    if (!Number.isFinite(offset)) return;
+  setClipping(axis: "off" | "x" | "y" | "z", offset: number, reverse = false, cap = this.#clipping.cap, capColor = this.#clipping.capColor): void {
+    if (!Number.isFinite(offset) || !["off", "x", "y", "z"].includes(axis) || !/^#[0-9a-f]{6}$/i.test(capColor)) return;
+    this.#clipping = { axis, offset, reverse, cap, capColor };
+    this.#tools?.setClipping(this.#clipping);
     const planes: THREE.Plane[] = [];
     if (axis !== "off") { const normal = new THREE.Vector3(); normal[axis] = reverse ? -1 : 1; planes.push(new THREE.Plane(normal, -offset * (reverse ? -1 : 1))); }
     this.#renderer.clippingPlanes = planes; this.requestRender();
@@ -200,15 +245,18 @@ export class SceneAdapter {
     this.#points.geometry.dispose(); this.#points.geometry = new THREE.BufferGeometry();
     this.#tools?.setMeasurement(null, 0); this.requestRender();
   }
-  async exportPng(includeHelpers = false): Promise<Blob> {
+  async exportPng(includeHelpers = false, options?: Partial<Omit<PngExportOptions, "includeHelpers">>): Promise<Blob> {
     const helpers = [this.#grid, this.#axes, this.#measurement, this.#points, ...this.#interaction.getHelpers()];
-    const visible = helpers.map((helper) => helper.visible);
+    const width = options?.width ?? this.#renderer.domElement.width;
+    const height = options?.height ?? this.#renderer.domElement.height;
     try {
-      if (!includeHelpers) helpers.forEach((helper) => { helper.visible = false; });
-      this.#renderer.render(this.#scene, this.#camera);
-      // toBlob captures synchronously before helpers are restored or another frame renders.
-      return await new Promise<Blob>((resolve, reject) => this.#renderer.domElement.toBlob((blob) => blob ? resolve(blob) : reject(new Error("PNG encoding failed")), "image/png"));
-    } finally { helpers.forEach((helper, index) => { helper.visible = visible[index]!; }); this.requestRender(); }
+      const encoded = renderPng(this.#renderer, this.#scene, this.#camera, helpers, { ...options, width, height, includeHelpers }, camera => this.#renderScene(camera));
+      // The synchronous capture has already restored (and resized) the canvas.
+      // Redraw now, while encoding is still pending, so idle scenes stay visible.
+      this.requestRender();
+      return await encoded;
+    }
+    finally { this.requestRender(); }
   }
   async exportGlb(): Promise<Blob> {
     const { GLTFExporter } = await import("three/addons/exporters/GLTFExporter.js");
@@ -225,12 +273,12 @@ export class SceneAdapter {
   dispose(): void {
     this.#disposed = true; this.#demand.dispose(); this.#abort.abort(); this.#player.clear(); this.#tools?.dispose();
     configureGLTFRenderer(null); this.#resizeObserver.disconnect(); this.#interaction.dispose(); this.#controls.dispose();
-    this.#sceneGraph.dispose();
+    this.#caps.dispose(); this.#sceneGraph.dispose();
     for (const object of [this.#grid, this.#axes, this.#measurement, this.#points]) { object.geometry.dispose(); const materials = Array.isArray(object.material) ? object.material : [object.material]; materials.forEach((material) => material.dispose()); }
-    this.#scene.environment = null; this.#ownedEnvironment?.dispose(); this.#environment.dispose(); this.#renderer.dispose(); this.#renderer.domElement.remove();
+    this.panelsContainer.remove(); this.#scene.environment = null; this.#ownedEnvironment?.dispose(); this.#environment.dispose(); this.#renderer.dispose(); this.#renderer.domElement.remove();
   }
   #createRenderer(): THREE.WebGLRenderer {
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, stencil: true, powerPreference: "high-performance" });
     renderer.domElement.className = "viewport-canvas"; renderer.domElement.tabIndex = 0;
     renderer.domElement.setAttribute("aria-label", "3D viewport: drag to orbit, right drag to pan, wheel to zoom");
     renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
@@ -248,7 +296,8 @@ export class SceneAdapter {
     if ((this.#camera instanceof THREE.OrthographicCamera) === (projection === "orthographic")) return;
     const old = this.#camera;
     if (projection === "orthographic") this.#orthographicHeight = 2 * old.position.distanceTo(this.#controls.target) * Math.tan(THREE.MathUtils.degToRad(this.#fov / 2));
-    this.#camera = projection === "orthographic" ? new THREE.OrthographicCamera() : new THREE.PerspectiveCamera(this.#fov);
+    this.#camera = this.#projectionCameras.get(projection) ?? (projection === "orthographic" ? new THREE.OrthographicCamera() : new THREE.PerspectiveCamera(this.#fov));
+    this.#projectionCameras.set(projection, this.#camera); this.#camera.zoom = 1;
     this.#camera.position.copy(old.position); this.#camera.quaternion.copy(old.quaternion); this.#camera.up.copy(old.up);
     this.#camera.near = old.near; this.#camera.far = old.far;
     this.#controls.object = this.#camera; this.#interaction.setCamera(this.#camera); this.#updateProjection(); this.#controls.update();
@@ -292,7 +341,7 @@ export class SceneAdapter {
   #render(delta: number): boolean {
     this.#player.update(delta);
     if (this.#player.root) this.#interaction.refreshSelection();
-    this.#renderer.render(this.#scene, this.#camera); this.#frameCount++;
+    this.#renderScene(this.#camera); this.#frameCount++; this.#reviewHandlers?.refresh();
     this.#tools?.setPlayback(this.#player.time, this.#player.duration, this.#player.playing);
     const now = performance.now();
     if (!this.#player.playing || now - this.#lastStatsTime >= 250) {
@@ -301,6 +350,18 @@ export class SceneAdapter {
       this.#tools?.setStats(`Draw calls: ${info.render.calls} · Triangles: ${info.render.triangles.toLocaleString()}\nGeometry: ${info.memory.geometries} · Textures: ${info.memory.textures}\nFrames: ${this.#frameCount}${this.#importDuration === null ? "" : ` · Import: ${this.#importDuration.toFixed(0)} ms`}`);
     }
     return this.#player.playing;
+  }
+  #renderScene(camera: THREE.Camera): void {
+    const autoReset = this.#renderer.info.autoReset;
+    this.#renderer.info.autoReset = false; this.#renderer.info.reset();
+    try {
+      this.#renderer.render(this.#scene, camera);
+      const plane = this.#renderer.clippingPlanes[0];
+      if (this.#clipping.cap && plane) {
+        const status = this.#caps.render(this.#renderer, camera, this.#sceneGraph.getPickableObjects(), plane, this.#clipping.capColor);
+        this.#tools?.setCapStatus(status.eligible, status.skipped);
+      } else this.#tools?.setCapStatus(0, 0);
+    } finally { this.#renderer.info.autoReset = autoReset; }
   }
   #refreshClips(): void {
     const root = this.#selectedId ? this.#sceneGraph.getObjectById(this.#selectedId) : undefined;
@@ -315,7 +376,7 @@ export class SceneAdapter {
     const entry = this.#clipEntries[index]; if (entry) this.#player.select(entry.root, entry.clip);
     this.#syncTransformEnabled(); this.requestRender();
   }
-  #syncTransformEnabled(): void { this.#interaction.setTransformEnabled(!this.#measuring && this.#player.root === null); }
+  #syncTransformEnabled(): void { this.#interaction.setTransformEnabled(!this.#measuring && !this.#reviewPicking && this.#player.root === null); }
   #pickMeasurement(intersection: THREE.Intersection | undefined): boolean {
     if (!this.#measuring) return false;
     if (!intersection || !(intersection.object instanceof THREE.Mesh)) return true;

@@ -101,6 +101,9 @@ export async function decodeProject(blob: Blob): Promise<DecodedProject> {
     if (imports.has(id) || !model.imports.some(a => a.assetId === id) || !Array.isArray(entry.files)) throw new Error("Invalid project import reference.");
     const options = record(entry.options);
     if (!["auto", "millimeter", "centimeter", "meter", "inch", "foot"].includes(String(options.unit)) || !["auto", "y-up", "z-up"].includes(String(options.coordinateSystem)) || !["low", "medium", "high"].includes(String(options.quality)) || typeof options.centerModel !== "boolean" || typeof options.placeOnGround !== "boolean") throw new Error("Invalid saved import options.");
+    if (options.stepStructure !== undefined && options.stepStructure !== "flat" && options.stepStructure !== "assembly") throw new Error("Invalid STEP structure option.");
+    // Legacy projects used a flattened hierarchy. Preserve their node paths.
+    if (/\.(?:step|stp)$/i.test(primaryName)) options.stepStructure ??= "flat";
     const sourceFiles = entry.files.map(fileAt);
     const paths = sourceFiles.map(f => f.webkitRelativePath || f.name);
     if (!pathSafe(primaryPath) || new Set(paths).size !== paths.length || sourceFiles.filter(f => (f.webkitRelativePath || f.name) === primaryPath && f.name === primaryName).length !== 1) throw new Error("Ambiguous project files.");

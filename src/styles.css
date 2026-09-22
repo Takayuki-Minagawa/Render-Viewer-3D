@@ -1823,3 +1823,9 @@ input:focus {
     grid-template-columns: minmax(76px, 0.42fr) minmax(0, 1fr);
   }
 }
+
+/* Viewport controls share one stack so expanded panels cannot cover each other. */
+.viewport-panel-stack { position:absolute; top:12px; right:12px; z-index:5; width:min(330px,calc(100% - 24px)); max-height:calc(100% - 24px); display:flex; flex-direction:column; align-items:flex-end; gap:6px; pointer-events:none; }
+.viewport-panel-stack > details { position:static; top:auto; right:auto; left:auto; width:100%; min-height:34px; flex-shrink:1; max-height:none; pointer-events:auto; box-sizing:border-box; }
+.viewport-panel-stack > details:not([open]) { flex-shrink:0; width:auto; }
+.viewport-panel-stack > details[open] { overflow:auto; min-height:90px; }

@@ -346,3 +346,11 @@ Full terms: licenses/Basis-Universal-LICENSE.txt
 Meshoptimizer 1.1 decoder (bundled by Three.js r185) — Copyright (c) 2016-2026 Arseny Kapoulkine — MIT.
 https://github.com/zeux/meshoptimizer
 Full notice: licenses/Meshoptimizer-LICENSE.txt
+
+
+glTF diagnostics and optimization tools
+======================================
+gltf-validator 2.0.0-dev.3.10 (Apache-2.0), including upstream NOTICES.
+@gltf-transform/core, extensions and functions 4.5.0 (MIT).
+Full license text and transitive browser-runtime notices are distributed in:
+licenses/glTF-Tools-LICENSES.txt

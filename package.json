@@ -22,10 +22,14 @@
     "test:e2e": "playwright test"
   },
   "engines": {
-    "node": "^18.0.0 || ^20.0.0 || >=22.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
+    "@gltf-transform/core": "4.5.0",
+    "@gltf-transform/extensions": "4.5.0",
+    "@gltf-transform/functions": "4.5.0",
     "comlink": "4.4.2",
+    "gltf-validator": "2.0.0-dev.3.10",
     "immer": "^11.1.18",
     "occt-wasm": "4.3.1",
     "three": "^0.185.1"

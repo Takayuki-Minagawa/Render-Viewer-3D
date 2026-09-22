@@ -1,5 +1,6 @@
 import type { ImportedSceneModel } from "./imported-scene-model";
 import type { MaterialDefinitionModel } from "./material/material-model";
+import type { ReviewModel } from "./review-model";
 
 export type { MaterialDefinitionModel } from "./material/material-model";
 
@@ -116,7 +117,8 @@ export interface CameraModel {
 export interface SceneModel {
   exposure?: number;
   environment?: { assetId: string; name: string } | null;
-  schemaVersion: 2;
+  schemaVersion: 3;
+  review: ReviewModel;
   name: string;
   backgroundColor: string;
   shadowsEnabled: boolean;

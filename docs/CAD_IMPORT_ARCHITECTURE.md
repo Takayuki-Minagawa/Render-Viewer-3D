@@ -57,7 +57,7 @@ RegistryへImporterを追加しただけでは自動更新されません。
 | `FBXImporter` | Three.js `FBXLoader` / `TGALoader` | Experimental | 階層、マテリアル、animation、ローカルtexture sidecarを保持し、binary配列をpreflightして`UnitScaleFactor`とLoaderのaxis補正を共通正規化で一度だけ適用します。 |
 | `ColladaImporter` | Three.js `ColladaLoader` | Experimental | 文書の`unit` / `up_axis`とXML構造をLoader作成前に検証し、Loaderの補正を戻して共通正規化で一度だけ適用します。階層、マテリアル、animationとローカルsidecarを保持します。 |
 | `ThreeMFImporter` | Three.js `3MFLoader` | Experimental | ZIP / XMLをpreflightして単一root modelのunit、mesh、マテリアルを読み込み、Z-upからY-upへ正規化します。 |
-| `STEPImporter` | `occt-wasm` 4.3.1 | Experimental | Worker内でSTEPをOpen CASCADE shapeへ読み、品質別設定でtessellateして`BufferGeometry`へ変換します。 |
+| `STEPImporter` | `occt-wasm` 4.3.1 | Experimental | Worker内のXCAF → 埋込GLB経路でassembly階層、part名、配置、色を保持します。同じ部品のface primitiveをmaterial group付きmeshへ結合し、旧projectは単一meshのflat経路で復元します。 |
 
 PLY / FBX / COLLADA / 3MFのThree.js addonは静的にmain bundleへ含めず、`import()`で
 形式別のdynamic chunkとして生成します。利用者がその形式を選んだときだけ対応chunkを読み込み、
@@ -86,7 +86,7 @@ Three.js r185の`new URL(..., import.meta.url)`参照をViteが解決し、decod
   単一root `3D/*.model`だけを許可してmulti-part、model relationship part、texture resourceを拒否します。
 - GLTF / OBJ / STL / PLY / FBX / DAE / 3MFの解析結果は50,000 scene node、深さ256、10,000 renderable、
   200万position vertex、200万vertex reference、200万primitiveまでです。
-- STEPはWorker入力128 MiB、出力200万頂点・200万triangleまでです。
+- STEPはWorker入力128 MiB、全配置の合計200万頂点・200万triangleまでです。assembly経路の埋込GLBは128 MiB、JSONは16 MiB、元node・renderable primitiveはそれぞれ10,000件、深さ128までです。Worker内で出力検査してからtransferし、main threadでも検査します。OCCT解析中のピークメモリ上限ではありません。
 - glTFはbuffer宣言・Meshopt展開先を128 MiBまで、accessor件数とnodeの深さ・循環を解析前に検査します。
 - KTX2 headerをdecode前に検査し、glTF / OBJのtextureはdecode後にも一辺16,384 px・合計32 MPを検査します。
 - STLは1 MiB以上で利用可能なWorkerへ移し、入力ArrayBufferと出力typed bufferをtransferします。成功・失敗・abortでWorkerを終了します。Workerがない環境ではmain thread解析です。
@@ -114,6 +114,11 @@ Importerが検証し、ColladaLoaderのscale / rotationを一度戻して共通�
 X_UPは明示的に拒否し、二重scale / rotationを防ぎます。3MFはroot modelの`unit`を検出して
 Autoへ渡し、形式既定のZ-upからY-upへ一度だけ変換します。package inspectionが完了できない場合だけ
 millimeterを仮定する構造化warningを残します。
+
+STEPのXCAF exporterはOCCT内部のmillimeterからmeterへ変換したGLBを返します。
+assembly経路ではcontent rootでこのscaleを一度戻してから共通正規化へ渡すため、
+旧flat経路と同じ単位・軸指定を適用できます。mm / m宣言、非対称の箱、入れ子の回転・
+平行移動を持つfixtureで、部品配置への二重補正がないことを検証しています。
 
 OBJ / STL / PLYなど単位またはup-axisを取得できない形式でAutoを選ぶと、meter / Y-upを仮定し、
 その仮定をwarningとしてimport recordへ残します。元の子objectのlocal transformは変更せず、
@@ -172,24 +177,41 @@ resource解放はmeshと同じroot単位で扱います。
 
 仕様書では`occt-import-js`を候補としていましたが、2026-08-19の調査時点では
 [`occt-wasm` 4.3.1](https://github.com/andymai/occt-wasm/tree/v4.3.1)をexact pinしました。
-選定理由は、Open CASCADE 8.0.1を使うTypeScript-first API、専用の`OcctWorker` helper、
+選定理由は、Open CASCADE 8.0.1を使うTypeScript-first API、Worker対応、
 明示的なshape解放、品質指定可能なtessellation API、およびWASMを静的URLとして渡せる
 構成が、今回のVite / GitHub Pages構成に合うためです。重いSTEP処理はmain threadではなく
-Workerで実行し、成功・失敗のどちらでもshapeを解放してWorkerを終了します。
+Workerで実行します。現在はComlinkで独自WorkerのAPIを呼び、assembly経路のXCAF documentを
+`finally`で閉じます。flat経路ではshapeを解放します。取消・成功・失敗のいずれでもWorkerを終了します。
 
 WASMはJavaScript bundleへ埋め込まず、Viteが独立した`.wasm` assetとして出力し、Workerへ
 そのURLを渡します。これにより静的hostingで配信でき、互換性のある変更版WASMを使う場合も
 配布者がasset / URLを差し替えられます。現在のUIにWASM URLを変更する設定はありません。
 
+### STEP assemblyと旧projectの復元
+
+- 新規取込は`stepStructure: "assembly"`を使用し、元ファイルとともに読込モードを保存します。
+  4.3.1は`getReferredLabel` / `getLocation`を公開していないため、直接label走査ではなく
+  `importXCAFFromSTEP` → `exportGLTF`で参照部品と配置を解決します。依存更新はしていません。
+- 出力GLBの外部buffer / imageを拒否し、Three.jsへ渡すときも外部URLを解決しません。
+  名前・色の欠落には既定名とlight-grayのPBR材質を適用します。CAD色は保持しますが、
+  CAD側の全材質物性をPBRへ厳密変換する機能ではありません。
+- 保存済みoptionsに`stepStructure`がない旧projectは`"flat"`として復元します。
+  `importStep` → `tessellate`で単一triangle meshを作る旧経路を維持し、旧`node-0`の表示・
+  材質指定を新しいassemblyへ誤適用しません。flat経路だけがflattenの構造化warningを返します。
+- 部品内のfaceを結合し、部品階層・色と閉じたmeshの断面表示を両立します。
+  同じ原本・固定Importerでのnode index pathは再現しますが、変更されたSTEP原本や将来の
+  kernel更新をまたぐ永続的なCAD topology IDではありません。
+
 ### STEPの既知制限
 
-- 現在の`importStep` → `tessellate` Worker経路は1つのtriangle meshへ変換するため、
-  assembly階層、part名、色、元マテリアルをflattenし、構造化warningを返します。
 - tessellation品質は形状再現の許容誤差を変えますが、CAD topology自体は保持しません。
 - WASM SIMD、tail calls、WASM exception handlingが必要です。上流がkernel読込を確認した
   最小版はChrome / Edge 114、Safari 17.2、Firefox 121です。
 - `occt-wasm`の現在のbuildはIGES moduleを含みません。IGES対応は別Importerと適切な
   browser対応libraryを改めて選定します。
+
+[固定版の試作結果・実装と検証](./STEP_ASSEMBLY_IMPLEMENTATION.md)に、assembly変換の根拠、
+メモリ上限の意味と合成fixtureを記載しています。
 
 ## ライセンス
 
@@ -198,7 +220,7 @@ MITです。FBX圧縮配列preflightと3MF ZIP展開のdynamic chunkへruntime c
 repository向けとPages artifact向けの両方の第三者通知へ、固定source、copyright、MIT全文を記載します。
 
 `occt-wasm` 4.3.1のTypeScript wrapper / build toolingはMIT OR Apache-2.0、配布する
-Open CASCADE WebAssemblyはLGPL-2.1-only WITH OCCT-exception-1.0です。Worker helperが
+Open CASCADE WebAssemblyはLGPL-2.1-only WITH OCCT-exception-1.0です。Worker RPCが
 使うComlink 4.4.2はApache-2.0です。対応する正確なOCCT sourceは
 [`andymai/OCCT@055a9a8a`](https://github.com/andymai/OCCT/tree/055a9a8a2b3fbb33da2ec9a5445d2b97ffbcd765)で、
 [公式OCCT V8_0_1](https://github.com/Open-Cascade-SAS/OCCT/tree/V8_0_1)はupstream baselineです。
@@ -245,9 +267,10 @@ unit / axis・animation・sidecar待機・abort / error cleanup、FBX binary配�
 3MFのZIP / XML安全上限・unit・material保持を検証します。DAE / 3MFのimporter unit / preflight / fixture testは
 `linkedom`でNode.jsへ`DOMParser`を補い、実fixtureをThree.js addonへ通して実loaderとの接続も確認します。
 
-STEP unit testは注入したWorker clientでWorker境界・品質設定・必ず行うcleanupを検証します。
+STEP unit testは注入したWorker clientでWorker境界・品質設定・cleanupを検証し、固定4.3.1の
+実WASMでも入れ子assembly、色、配置、単位、総量上限、旧flat projectを確認します。
 PlaywrightではPagesのbase配下で同梱decoderと実OCCT Worker / WASMを起動し、合成STEP boxの
-寸法・triangle数を確認します。Chromium / Firefox / WebKitの個別確認と最終一括結果は
+寸法・triangle数に加えてassembly部品の編集と保存・復元を確認します。初期実装のChromium / Firefox / WebKit確認は
 [検証記録](./IMPLEMENTATION_VALIDATION.md)を参照してください。実機Safariは別途確認対象です。共通ではimport record command、runtime asset lifecycle、material round-trip、
 Camera Auto Fitを検証します。
 
@@ -257,7 +280,7 @@ Camera Auto Fitを検証します。
 DemandRendererは変更要求を次の1frameへまとめ、animation再生中だけ連続描画します。
 GLBは別のhierarchy / geometry / material / texture snapshotを作って非同期出力し、編集補助を除外します。
 専用projectとGLBは役割が異なり、GLBから元の編集パラメータやPOV-Ray概念の完全復元はしません。
-断面は蓋なし、距離は三角形表面のworld-space交点間です。STEPのB-Rep厳密計測ではありません。
+断面は単一平面で、閉じた不透明な静的meshに限りcapの色付けを利用できます。距離・角度は三角形表面のworld-space交点から計算し、外形寸法はworld AABBです。STEPのB-Rep厳密計測ではありません。保存できる視点・注記・計測、PNG・glTF診断の詳細は[追加機能の記録](./ADDITIONAL_FEATURES.md)を参照してください。
 
 `renderer.info`の件数とimport時間を表示し、影・pixel ratioを変更できます。固定STL / OBJの解析時間は
 `scripts/benchmark-importers.mjs`で再測定できます。今回STL Worker経路を追加しましたが、

@@ -279,7 +279,7 @@ describe("scene schema migration", () => {
 
     const migrated = material.migrateSceneModel(legacy);
     assert.deepEqual(legacy, before);
-    assert.equal(migrated.schemaVersion, 2);
+    assert.equal(migrated.schemaVersion, 3);
     assert.deepEqual(migrated.imports, []);
     assert.equal(migrated.materials.length, 2);
     assert.equal(new Set(migrated.objects.map((object) => object.materialId)).size, 2);
@@ -511,7 +511,7 @@ describe("capability catalog and default scene", () => {
 
   it("places box, sphere, and ground with independent valid materials", () => {
     const scene = createDefaultSceneModel();
-    assert.equal(scene.schemaVersion, 2);
+    assert.equal(scene.schemaVersion, 3);
     assert.deepEqual(
       scene.objects.map((object) => object.geometry.type),
       ["box", "sphere", "plane"],

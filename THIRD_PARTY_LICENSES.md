@@ -208,3 +208,12 @@ https://github.com/zeux/meshoptimizer
 Full notice: licenses/Meshoptimizer-LICENSE.txt
 
 @playwright/test is a development-only Apache-2.0 dependency. Its browser binaries and test fixtures are not included in the Pages artifact. Fixture attribution is in tests/fixtures/compressed/README.md.
+
+
+## glTF diagnostics and optimized-copy tools
+
+- gltf-validator **2.0.0-dev.3.10** (exact): Apache-2.0. Khronos Group validator, including upstream third-party NOTICES.
+- @gltf-transform/core, @gltf-transform/extensions and @gltf-transform/functions **4.5.0** (exact): MIT, Don McCurdy.
+- Browser transitive runtime notices (property-graph, ktx-parse and ndarray utilities) are retained together with the above packages in [glTF-Tools-LICENSES.txt](./public/licenses/glTF-Tools-LICENSES.txt).
+
+These tools run in a local, lazily loaded Worker. The SDK uses its WebIO/browser entry; the Node-only Sharp dependency is not distributed in the Pages bundle. No texture encoding, geometry simplification or model upload is performed.

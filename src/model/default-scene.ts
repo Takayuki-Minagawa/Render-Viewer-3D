@@ -1,4 +1,5 @@
 import type { SceneModel } from "./scene-model";
+import { createReviewModel } from "./review-model";
 import {
   createMaterialDefinition,
   createPovMaterialFromPreview,
@@ -28,7 +29,8 @@ const groundMaterial = createMaterialDefinition(
 );
 
 const DEFAULT_SCENE: SceneModel = {
-  schemaVersion: 2,
+  schemaVersion: 3,
+  review: createReviewModel(),
   name: "Lighting Study 01",
   backgroundColor: "#10141b",
   shadowsEnabled: true,

@@ -15,6 +15,7 @@ export class ProjectAssets {
 
   capture(assetId: string, primary: File, files: readonly File[], options: ImportOptions): void {
     const { signal: _signal, ...savedOptions } = options;
+    if (/\.(?:step|stp)$/i.test(primary.name)) savedOptions.stepStructure ??= "assembly";
     this.imports.set(assetId, { primaryName: primary.name, primaryPath: primary.webkitRelativePath || primary.name, files: files.includes(primary) ? [...files] : [primary, ...files], options: savedOptions });
   }
 

@@ -55,3 +55,35 @@ node scripts/benchmark-gltf-tools.mjs
 - [Khronos glTF Validator](https://github.com/KhronosGroup/glTF-Validator)／[glTF Transform](https://github.com/donmccurdy/glTF-Transform)：診断とデータ整理。採用版・ライセンスはlockfileと[第三者通知](../THIRD_PARTY_LICENSES.md)に固定。
 - [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh)：性能候補として評価。今回は依存を追加していない。
 - [GitHub Pages workflow](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)：許可された公開用途だけに使用。
+
+## PR後の独立レビュー
+
+[PR #9](https://github.com/Takayuki-Minagawa/Render-Viewer-3D/pull/9)の作成後に3名のサブエージェントが担当外の差分をレビューしました。メインエージェントが指摘を修正し、再現試験とレビュアーの再確認を行いました。GitHub Actionsによるレビューやテストは使用していません。
+
+| 指摘 | 修正・再確認 |
+| --- | --- |
+| ガラス材質でPNG出力ごとに内部textureが増加 | rendererごとに投影別cameraを再利用。連続出力と投影切替で資源数が一定 |
+| transmission材質が不透明capの対象になる | 透過を含む材質を対象外にし、material groupの完全被覆も検査 |
+| 半透明の重なり／非tone mapping材質でPNGと画面の色が異なる | 画面と同じ描画経路へ変更し、RGBA比較とhelper復元を検証 |
+| PNG encoding中に画面の再描画が遅れる | 同期snapshotとサイズ復元の直後に再描画要求。encoding callback保留中も画面更新を確認 |
+| 未使用POSITION頂点が外形寸法へ混入 | index・drawRange・可視material groupの範囲を走査。対応するcache失効条件を追加 |
+| 非有限geometryからNaN寸法や不正anchorが作られる | 非有限座標と保存範囲外anchorを拒否。計測の正本を汚さないことを確認 |
+| 保存視点と現在cameraのup検証範囲が不一致 | 両方を同じ範囲へ揃え、呼出し後に保存不能になる入力を拒否 |
+
+コード修正の検証対象commitは `4ad8b4c61850e7e47db2ff84d943f48f2a9172d7`。独立レビューの未解決指摘はありません。STEPでは別途、透過を持つ自作fixtureについても色・opacity・反復配置を確認しました。将来のImporter更新による階層変化まで無条件に互換を保証するものではありません。
+
+## 最終ローカル検証
+
+macOS arm64、Node.js 22.18.0、Chromium 153.0.8010.12／Firefox 155.0／WebKit 26.6。以下は上記コード修正commitに対する実行結果です。この後の変更は本記録の追加のみです。
+
+| 検証 | 結果 |
+| --- | --- |
+| `npm test` | 330件成功、失敗・skipなし |
+| `npm run build`（prebuild型検査を含む） | 成功。既存のbundleサイズ警告とbrowserに使わないNode SDK参照のexternalization警告あり |
+| `npx playwright test` | 3ブラウザ合計90件成功、失敗・skipなし |
+| `RV3D_PREVIEW=1 npx playwright test tests/e2e/production.spec.ts tests/e2e/asset-tools.spec.ts tests/e2e/additional-ui.spec.ts --grep 'published\|lights exposure\|asset panel\|PNG presets\|review views'` | Pages base pathの配布buildで3ブラウザ合計18件成功、失敗・skipなし |
+| PNG出力 | Full HD／4Kの実pixel寸法、透明alpha、画面と出力の色一致、helper復旧、encoding失敗復旧、encoding中再描画、ガラス材質の資源数一定 |
+| project／モデル | 旧schema移行、レビュー保存・再起動復元、STEP実Workerと保存再解析、Undo、参照切れ・再取付、local-only glTF Worker |
+| Actions | PR作成・更新に対する実行0件を確認。最終の手動Pages公開だけを使用 |
+
+公開先は[GitHub Pages](https://takayuki-minagawa.github.io/Render-Viewer-3D/)。マージcommitと最終公開結果は[PR #9](https://github.com/Takayuki-Minagawa/Render-Viewer-3D/pull/9)および[公開workflow履歴](https://github.com/Takayuki-Minagawa/Render-Viewer-3D/actions/workflows/deploy.yml)を正とします。WebKit自動試験は実機Safari・低memory端末を実測した保証ではありません。

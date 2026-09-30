@@ -1,6 +1,6 @@
 # 実装・検証記録
 
-更新日：2026-09-07。元の[調査・作業計画](./REFACTORING_AND_FEATURE_PLAN.md)に対する実装状況です。
+更新日：2026-09-07。[当時の調査・作業計画（Git履歴）](https://github.com/Takayuki-Minagawa/Render-Viewer-3D/blob/9f2a51f2910fd8331158d5b2aa1a649f343aa607/docs/REFACTORING_AND_FEATURE_PLAN.md)に対する実装状況です。完了済みの計画ファイルは整理し、実装・検証記録を本書に残しています。
 
 本書は2026-09-07時点の履歴です。2026-09-22の機能追加と検証・採否は[追加機能の記録](./ADDITIONAL_FEATURES.md)を参照してください。現在のGitHub Actionsは手動Pages公開専用で、以下にある過去の検証workflow運用は適用しません。
 

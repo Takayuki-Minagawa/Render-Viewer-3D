@@ -1,7 +1,13 @@
+import { current, isDraft, type Draft } from "immer";
 import type { DeepReadonly } from "./scene-model";
 
+/** Clone the latest model value, including edits made in an active Immer recipe. */
+export function cloneModelValue<T>(value: T): T {
+  return structuredClone(isDraft(value) ? current<T>(value as Draft<T>) : value);
+}
+
 export function cloneAndFreeze<T>(value: T): DeepReadonly<T> {
-  return freezeDeep(structuredClone(value));
+  return freezeDeep(cloneModelValue(value));
 }
 
 export function freezeDeep<T>(value: T): DeepReadonly<T> {

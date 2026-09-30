@@ -2,6 +2,39 @@
 
 2026-09-22。既存のモデル表示、保存・履歴、インポート機能を拡張した記録です。使い方と制限は[README](../README.md#出力計測の範囲)を参照してください。
 
+## 2026-09-30 点検と追加改善
+
+Store・モデル・描画・UIの分離は維持し、以下の限定的な修正・共通化を採用しました。
+
+- オブジェクト／材質の複製と材質の個別化：Immer draftを直接`structuredClone`へ渡すと`DataCloneError`になる不具合を修正。`current()`で同じ更新処理内の変更を含むsnapshotを得てから独立したコピーを作ります。実際のSceneStore・Undo／Redo経由で回帰試験を行います。
+- カメラFit：非表示node・非表示material group・未使用頂点を除いた描画範囲を計算。「全体をFit」を追加し、計測とFitの描画範囲選択を共通化しました。透視／正投影、現在のskin／morph姿勢、instance、点群・線のmorphを対象とし、断面の切断形状そのものは計算しません。
+- 追加候補のworld／local操作・スナップは、操作設定と履歴の設計を別途必要とするため保留。BVHは既存の測定で採用基準未達であり、今回の問題にも不要なので依存を追加しません。
+
+調査に用いた一次資料：
+
+- [Immer current](https://immerjs.github.io/immer/current/)：draftの現在値をproxyを含まないsnapshotにするAPI。
+- [Three.js Box3](https://threejs.org/docs/pages/Box3.html)／[採用版r185のBox3実装](https://github.com/mrdoob/three.js/blob/r185/src/math/Box3.js)：標準の階層境界計算は表示対象の範囲選択と異なるため、アプリ側で対象を絞ります。
+- [TransformControls](https://threejs.org/docs/pages/TransformControls.html)／[r185公式サンプル](https://github.com/mrdoob/three.js/blob/r185/examples/misc_controls_transform.html)：座標系切替・スナップの候補確認。
+- [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh)：高速化候補の再確認。下記測定の採否を維持。
+
+### PRレビューと最終検証
+
+[PR #10](https://github.com/Takayuki-Minagawa/Render-Viewer-3D/pull/10)の作成後、担当を分けた3名のサブエージェントが独立レビューしました。点群・線のmorph未反映と、instance数×頂点数の再走査を指摘し、メインエージェントが修正、指摘したレビュアーが再確認しました。未解決の指摘はありません。
+
+instanceでは共有の描画範囲とmorph属性の境界を一度求め、配置ごとに符号付きweightを反映した包含境界へ変換します。正確な頂点ごとのAABBより余白が増える場合がありますが、頂点数と配置数の積に比例する再走査を避けます。60,000頂点×500配置の独立測定は約327 msから約2.48 msへ改善しました（同一形状の比較。全端末・全モデルの保証ではありません）。相対／絶対morph、負のweight、回転・非一様scaleを含む300ケース・2,700頂点の包含確認も行いました。回帰試験は処理時間の閾値に依存せず、頂点属性の再読出し回数と包含性を検査します。
+
+検証対象のコードcommitは`233c5c8c59399828b7441f4ae3c1637f067ce71b`。以後の変更は本記録のみです。Node.js 22.18.0、macOS arm64、Chromium 153.0.8010.12／Firefox 155.0／WebKit 26.6で実行しました。
+
+| 検証 | 結果 |
+| --- | --- |
+| `npm test` | 347件成功、失敗・skipなし |
+| `npm run build` | 型検査・配布build成功。既存のbundleサイズ・Node SDK externalization警告あり |
+| `npm run test:e2e` | 3ブラウザ合計99件成功、失敗・skipなし |
+| `RV3D_PREVIEW=1 npm run test:e2e -- tests/e2e/production.spec.ts tests/e2e/duplication.spec.ts` | Pages base pathの配布buildで3ブラウザ合計12件成功 |
+| PR運用 | ローカルで検証・レビュー。Pages以外のActionsは使用せず、一時作業計画は削除 |
+
+以下の実装・検証記録は2026-09-22の変更時点のものです。
+
 ## 実装範囲
 
 | 対象 | 結果 |

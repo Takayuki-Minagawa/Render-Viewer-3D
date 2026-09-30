@@ -1,4 +1,5 @@
 import type { SceneModel } from "../scene-model";
+import { cloneModelValue } from "../immutable";
 import type {
   MaterialDefinitionModel,
   MaterialPresetId,
@@ -50,7 +51,7 @@ export function duplicateMaterial(
   const source = findMaterial(draft, materialId);
   if (!source) return undefined;
 
-  const duplicate = structuredClone(source);
+  const duplicate = cloneModelValue(source);
   duplicate.id = createUniqueMaterialId(draft, `${source.id}-copy`);
   duplicate.name = createUniqueCopyName(draft, source.name);
   draft.materials.push(duplicate);

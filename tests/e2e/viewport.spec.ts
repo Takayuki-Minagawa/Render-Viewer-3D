@@ -71,3 +71,57 @@ test('switching imports with identical clip names resets clip selection and perm
   });
   expect(result).toEqual({reset:'-1',playable:true});
 });
+
+test('Fit all frames visible scene roots without selection and preserves empty-scene cameras', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('./');
+  await page.evaluate(() => {
+    const { store, adapter } = (window as any).__viewer;
+    store.update((draft: any) => {
+      draft.objects = draft.objects.slice(0, 3);
+      draft.objects.forEach((object: any, index: number) => {
+        object.geometry = { type: 'box', width: 2, height: 2, depth: 2 };
+        object.transform = { position: { x: [-10, 10, 1000][index], y: 0, z: 0 }, rotationDegrees: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } };
+        object.visible = index < 2;
+      });
+    });
+    adapter.setSelection(null);
+  });
+  await page.locator('.viewport-tools summary').click();
+  await expect(page.locator('[data-vt=fitAll]')).toHaveText('全体をFit');
+  await page.locator('[data-vt=fitAll]').click();
+  const perspective = await page.evaluate(() => (window as any).__viewer.store.getSnapshot().camera);
+  expect(perspective.target).toEqual({ x: 0, y: 0, z: 0 });
+  expect(Math.hypot(perspective.position.x, perspective.position.y, perspective.position.z)).toBeGreaterThan(11);
+  expect(Math.hypot(perspective.position.x, perspective.position.y, perspective.position.z)).toBeLessThan(200);
+  await page.locator('[data-vt=projection]').selectOption('orthographic');
+  await page.locator('[data-vt=fitAll]').click();
+  const orthographic = await page.evaluate(() => (window as any).__viewer.store.getSnapshot().camera);
+  expect(orthographic.projection).toBe('orthographic');
+  expect(orthographic.orthographicHeight).toBeGreaterThan(2);
+  await page.locator('[data-action=language]').click();
+  await expect(page.locator('[data-vt=fitAll]')).toHaveText('Fit all');
+  const empty = await page.evaluate(() => {
+    const { store, adapter } = (window as any).__viewer;
+    store.update((draft: any) => { draft.objects.forEach((object: any) => { object.visible = false; }); });
+    const before = JSON.stringify(store.getSnapshot().camera), fitted = adapter.fitAll();
+    return { fitted, unchanged: before === JSON.stringify(store.getSnapshot().camera) };
+  });
+  expect(empty).toEqual({ fitted: false, unchanged: true });
+  expect(errors).toEqual([]);
+});
+
+test('Fit selection frames an isolated imported part without its hidden sibling', async ({ page }) => {
+  await page.goto('./');
+  const obj = 'o PartA\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\no PartB\nv 100 0 0\nv 101 0 0\nv 100 1 0\nf 4 5 6\n';
+  await page.locator('[data-import-file-input]').setInputFiles({ name: 'separated-parts.obj', mimeType: 'text/plain', buffer: Buffer.from(obj) });
+  await expect(page.locator('.imported-node-tools')).toBeVisible();
+  await page.locator('[data-imported-node-select]').filter({ hasText: 'PartA' }).click();
+  await page.locator('[data-node-tool=isolate]').click();
+  await page.locator('.viewport-tools summary').click();
+  await page.locator('[data-vt=fit]').click();
+  const camera = await page.evaluate(() => (window as any).__viewer.store.getSnapshot().camera);
+  const distance = Math.hypot(camera.position.x - camera.target.x, camera.position.y - camera.target.y, camera.position.z - camera.target.z);
+  expect(distance).toBeLessThan(10);
+  expect(camera.target.x).toBeCloseTo(-50);
+});

@@ -6,6 +6,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { TransformMode } from "../app/editor-store";
 import type { CameraModel, DeepReadonly, SceneSnapshot, TransformModel, Vec3Model } from "../model/scene-model";
 import { calculateCameraFit } from "./camera-fit";
+import { visibleBounds } from "./visible-bounds";
 import { ImportedAssetStore } from "./imported-asset-store";
 import type { MaterialImageAssetStore } from "./material/image-asset-store";
 import { SceneGraphAdapter } from "./scene-graph-adapter";
@@ -120,6 +121,7 @@ export class SceneAdapter {
       projection: (projection) => { this.#switchProjection(projection); this.#commitCamera(); },
       view: (view) => this.setStandardView(view),
       fit: () => { if (this.#selectedId) this.fitToObject(this.#selectedId); },
+      fitAll: () => { this.fitAll(); },
       clipping: (axis, offset, reverse, cap, color) => this.setClipping(axis, offset, reverse, cap, color),
       measure: (enabled) => { this.#reviewHandlers?.cancel(); this.#measuring = enabled; this.#syncTransformEnabled(); this.requestRender(); },
       clearMeasurement: () => this.clearMeasurement(),
@@ -211,8 +213,15 @@ export class SceneAdapter {
 
   fitToObject(objectId: string): boolean {
     const object = this.#sceneGraph.getObjectById(objectId); if (!object) return false;
-    object.updateWorldMatrix(true, true);
-    const bounds = new THREE.Box3().setFromObject(object, true);
+    return this.#fitBounds(visibleBounds([object]));
+  }
+  fitAll(): boolean {
+    const roots = [...this.#model.objects, ...this.#model.imports]
+      .map(model => this.#sceneGraph.getObjectById(model.id))
+      .filter((root): root is THREE.Object3D => root !== undefined);
+    return this.#fitBounds(visibleBounds(roots));
+  }
+  #fitBounds(bounds: THREE.Box3): boolean {
     let fit;
     try { fit = calculateCameraFit(bounds, this.#fov, this.#aspect(), this.#camera.position.clone().sub(this.#controls.target)); } catch { return false; }
     this.#camera.position.copy(fit.position); this.#camera.near = fit.near; this.#camera.far = fit.far;

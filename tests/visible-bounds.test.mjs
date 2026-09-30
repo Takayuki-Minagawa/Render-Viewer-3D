@@ -110,3 +110,69 @@ test('empty scenes and geometry without position attributes do not invent bounds
   assert.equal(visibleBounds([]).isEmpty(), true);
   assert.equal(visibleBounds([new THREE.Group(), new THREE.Mesh(new THREE.BufferGeometry(), material())]).isEmpty(), true);
 });
+
+test('imported GLB points and lines fit the current relative morph pose within the draw range', async () => {
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const binary = Buffer.from(new Float32Array([
+    0, 0, 0, 2, 4, 0, 1000, 1000, 1000,
+    100, 0, 0, 100, 0, 0, 5000, 5000, 5000,
+  ]).buffer);
+  for (const mode of [0, 3]) {
+    const document = {
+      asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+      meshes: [{ weights: [1], primitives: [{ mode, attributes: { POSITION: 0 }, targets: [{ POSITION: 1 }] }] }],
+      buffers: [{ byteLength: binary.length }],
+      bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 36 }],
+      accessors: [
+        { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1000, 1000, 1000] },
+        { bufferView: 1, componentType: 5126, count: 3, type: 'VEC3', min: [100, 0, 0], max: [5000, 5000, 5000] },
+      ],
+    };
+    const json = Buffer.from(JSON.stringify(document));
+    const jsonSize = Math.ceil(json.length / 4) * 4;
+    const glb = Buffer.alloc(12 + 8 + jsonSize + 8 + binary.length);
+    glb.writeUInt32LE(0x46546c67, 0); glb.writeUInt32LE(2, 4); glb.writeUInt32LE(glb.length, 8);
+    glb.writeUInt32LE(jsonSize, 12); glb.writeUInt32LE(0x4e4f534a, 16);
+    glb.fill(0x20, 20, 20 + jsonSize); json.copy(glb, 20);
+    glb.writeUInt32LE(binary.length, 20 + jsonSize); glb.writeUInt32LE(0x004e4942, 24 + jsonSize);
+    binary.copy(glb, 28 + jsonSize);
+    const loaded = await new GLTFLoader().parseAsync(glb.buffer.slice(glb.byteOffset, glb.byteOffset + glb.length), '');
+    const object = loaded.scene.children[0];
+    assert.equal(object.type, mode === 0 ? 'Points' : 'Line');
+    assert.equal(object.geometry.morphTargetsRelative, true);
+    object.geometry.setDrawRange(0, 2);
+    assert.deepEqual(visibleBounds([loaded.scene]).min.toArray(), [100, 0, 0]);
+    assert.deepEqual(visibleBounds([loaded.scene]).max.toArray(), [102, 4, 0]);
+    object.morphTargetInfluences[0] = 0.25;
+    assert.deepEqual(visibleBounds([loaded.scene]).min.toArray(), [25, 0, 0]);
+    assert.deepEqual(visibleBounds([loaded.scene]).max.toArray(), [27, 4, 0]);
+    object.geometry.dispose(); object.material.dispose();
+  }
+});
+
+test('indexed points and lines fit absolute morphs with signed weights and world transforms', () => {
+  for (const kind of ['Points', 'Line']) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0, 2, 4, 0, 1000, 1000, 1000, -1000, -1000, -1000,
+    ], 3));
+    geometry.morphAttributes.position = [new THREE.Float32BufferAttribute([
+      10, 2, 0, 14, 8, 0, 5000, 5000, 5000, -5000, -5000, -5000,
+    ], 3)];
+    geometry.setIndex([2, 0, 1, 3]); geometry.setDrawRange(1, 2);
+    const object = kind === 'Points' ? new THREE.Points(geometry, new THREE.PointsMaterial())
+      : new THREE.Line(geometry, new THREE.LineBasicMaterial());
+    object.position.set(3, -2, 1); object.scale.set(2, 1, 1);
+    for (const [weight, minimum, maximum] of [
+      [0.5, [13, -1, 1], [19, 4, 1]],
+      [-0.5, [-7, -3, 1], [-5, 0, 1]],
+      [1.5, [33, 1, 1], [43, 8, 1]],
+    ]) {
+      object.morphTargetInfluences[0] = weight;
+      const bounds = visibleBounds([object]);
+      assert.deepEqual(bounds.min.toArray(), minimum, `${kind}, weight ${weight}`);
+      assert.deepEqual(bounds.max.toArray(), maximum, `${kind}, weight ${weight}`);
+    }
+    geometry.dispose(); object.material.dispose();
+  }
+});

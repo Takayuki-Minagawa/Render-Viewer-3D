@@ -35,7 +35,7 @@ export function calculateCameraFit(
     ? THREE.MathUtils.clamp(padding, 1, 4)
     : 1.2;
   const verticalHalfFov = THREE.MathUtils.degToRad(
-    THREE.MathUtils.clamp(verticalFovDegrees, 1, 179) * 0.5,
+    THREE.MathUtils.clamp(Number.isFinite(verticalFovDegrees) ? verticalFovDegrees : 45, 1, 179) * 0.5,
   );
   const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
   const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * safeAspect);

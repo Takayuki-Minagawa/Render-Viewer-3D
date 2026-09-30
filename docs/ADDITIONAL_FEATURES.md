@@ -2,6 +2,23 @@
 
 2026-09-22。既存のモデル表示、保存・履歴、インポート機能を拡張した記録です。使い方と制限は[README](../README.md#出力計測の範囲)を参照してください。
 
+## 2026-09-30 点検と追加改善
+
+Store・モデル・描画・UIの分離は維持し、以下の限定的な修正・共通化を採用しました。
+
+- オブジェクト／材質の複製と材質の個別化：Immer draftを直接`structuredClone`へ渡すと`DataCloneError`になる不具合を修正。`current()`で同じ更新処理内の変更を含むsnapshotを得てから独立したコピーを作ります。実際のSceneStore・Undo／Redo経由で回帰試験を行います。
+- カメラFit：非表示node・非表示material group・未使用頂点を除いた描画範囲を計算。「全体をFit」を追加し、計測とFitの描画範囲選択を共通化しました。透視／正投影、現在のskin／morph姿勢、instance、点群、線を対象とし、断面の切断形状そのものは計算しません。
+- 追加候補のworld／local操作・スナップは、操作設定と履歴の設計を別途必要とするため保留。BVHは既存の測定で採用基準未達であり、今回の問題にも不要なので依存を追加しません。
+
+調査に用いた一次資料：
+
+- [Immer current](https://immerjs.github.io/immer/current/)：draftの現在値をproxyを含まないsnapshotにするAPI。
+- [Three.js Box3](https://threejs.org/docs/pages/Box3.html)／[採用版r185のBox3実装](https://github.com/mrdoob/three.js/blob/r185/src/math/Box3.js)：標準の階層境界計算は表示対象の範囲選択と異なるため、アプリ側で対象を絞ります。
+- [TransformControls](https://threejs.org/docs/pages/TransformControls.html)／[r185公式サンプル](https://github.com/mrdoob/three.js/blob/r185/examples/misc_controls_transform.html)：座標系切替・スナップの候補確認。
+- [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh)：高速化候補の再確認。下記測定の採否を維持。
+
+以下の実装・検証記録は2026-09-22の変更時点のものです。
+
 ## 実装範囲
 
 | 対象 | 結果 |

@@ -12,6 +12,7 @@ import {
   findMaterial,
 } from "./material/material-commands";
 import { createMaterialDefinition } from "./material/material-presets";
+import { cloneModelValue } from "./immutable";
 
 export const SCENE_OBJECT_GEOMETRY_TYPES = [
   "box",
@@ -155,7 +156,7 @@ export function duplicateSceneObject(
 
   const source = draft.objects[sourceIndex];
   const identity = createUniqueObjectIdentity(draft, source.geometry.type);
-  const duplicate = structuredClone(source);
+  const duplicate = cloneModelValue(source);
   duplicate.id = identity.id;
   duplicate.name = createUniqueCopyName(draft, source.name);
 

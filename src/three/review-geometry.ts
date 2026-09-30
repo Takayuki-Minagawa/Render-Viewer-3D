@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { ReviewAnchor, ReviewBounds } from "../model/review-model";
 import type { DeepReadonly, Vec3Model } from "../model/scene-model";
+import { renderedRanges } from "./visible-bounds";
 
 const fingerprints = new WeakMap<THREE.BufferGeometry, { positions: unknown; index: unknown; version: number; indexVersion: number; key: string }>();
 const boundsCache = new WeakMap<THREE.Mesh, { positions: unknown; version: number; index: unknown; indexVersion: number; rangesKey: string; matrix: number[]; bounds: THREE.Box3 }>();
@@ -88,12 +89,7 @@ export function reviewBounds(root: THREE.Object3D | undefined, nodeId?: string):
     const position = node.geometry.getAttribute("position");
     if (!position) return;
     const version = position instanceof THREE.InterleavedBufferAttribute ? position.data.version : position.version;
-    const index = node.geometry.index, count = index?.count ?? position.count;
-    const start = Math.max(0, node.geometry.drawRange.start), end = Math.min(count, start + node.geometry.drawRange.count);
-    const ranges: { start: number; end: number }[] = [];
-    if (Array.isArray(node.material)) {
-      for (const group of node.geometry.groups) if (node.material[group.materialIndex ?? 0]?.visible) ranges.push({ start: Math.max(start, group.start), end: Math.min(end, group.start + group.count) });
-    } else if (node.material.visible) ranges.push({ start, end });
+    const index = node.geometry.index, ranges = renderedRanges(node);
     const rangesKey = JSON.stringify(ranges), indexVersion = index?.version ?? -1;
     const cached = boundsCache.get(node);
     if (cached?.positions === position && cached.version === version && cached.index === index && cached.indexVersion === indexVersion && cached.rangesKey === rangesKey && cached.matrix.every((value, i) => value === node.matrixWorld.elements[i])) { box.union(cached.bounds); return; }

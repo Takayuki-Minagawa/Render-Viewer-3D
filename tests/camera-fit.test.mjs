@@ -89,4 +89,13 @@ describe("camera auto fit", () => {
       /non-finite bounds/,
     );
   });
+
+  it("uses finite fallback parameters for invalid camera inputs", () => {
+    const fit = calculateCameraFit(
+      new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1)),
+      NaN, Infinity, new THREE.Vector3(NaN, 0, 0), NaN,
+    );
+    assert.ok(fit.position.toArray().every(Number.isFinite));
+    assert.ok(fit.near > 0 && fit.far > fit.near);
+  });
 });

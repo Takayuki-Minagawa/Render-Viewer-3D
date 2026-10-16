@@ -7,6 +7,7 @@ import type {
 } from "occt-wasm";
 import { BaseImporter } from "./BaseImporter";
 import { abortable } from "./abort";
+import { WorkerLifecycle } from "./worker-lifecycle";
 import { disposeLoadedObject } from "./loader-resource-wait";
 import { assertRenderableGeometryBudget, MAIN_THREAD_GEOMETRY_BUDGET } from "./geometry-budget";
 import { inspectSTEPAssemblyGLB, STEP_ASSEMBLY_MAX_DEPTH, STEP_ASSEMBLY_MAX_NODES, STEP_ASSEMBLY_MAX_TRIANGLES } from "./step-assembly";
@@ -28,6 +29,7 @@ export interface STEPWorkerClient {
 
 export interface STEPWorkerHandle {
   readonly ready: Promise<STEPWorkerClient>;
+  readonly terminated?: boolean;
   terminate(): void;
 }
 
@@ -55,6 +57,11 @@ const QUALITY_OPTIONS: Readonly<
 const MAX_STEP_VERTEX_COUNT = 2_000_000;
 const MAX_STEP_TRIANGLE_COUNT = 2_000_000;
 export const MAX_STEP_INPUT_BYTES = 128 * 1024 * 1024;
+// Each worker phase has a hard deadline, including cleanup RPCs. Native workers
+// have no reliable unexpected-exit event, so silence must also end the wait.
+export const STEP_WORKER_INIT_TIMEOUT_MS = 30_000;
+export const STEP_WORKER_OPERATION_TIMEOUT_MS = 120_000;
+export const STEP_WORKER_RELEASE_TIMEOUT_MS = 5_000;
 
 export function stepTessellationOptions(
   quality: TriangulationQuality,
@@ -67,31 +74,29 @@ function spawnSTEPWorker(): STEPWorkerHandle {
     new URL("./step-worker-entry.ts", import.meta.url),
     { type: "module" },
   );
-  let terminated = false;
-  const terminate = (): void => {
-    if (terminated) return;
-    terminated = true;
-    nativeWorker.terminate();
-  };
-  const ready = Promise.all([
+  const lifecycle = new WorkerLifecycle(nativeWorker);
+  const ready = lifecycle.run(() => Promise.all([
     import("comlink"),
     import("occt-wasm/dist/occt-wasm.wasm?url"),
   ]).then(async ([Comlink, wasmModule]) => {
-    if (terminated) {
+    if (lifecycle.terminated) {
       throw new DOMException("The STEP worker was terminated.", "AbortError");
     }
-    const client = Comlink.wrap<STEPWorkerClient & { init(options: InitOptions): Promise<void> }>(nativeWorker);
+    const client = Comlink.wrap<STEPWorkerClient & { init(options: InitOptions): Promise<void> }>(lifecycle.endpoint);
     await client.init({ wasm: wasmModule.default });
     return {
-      importStep: (data: string | ArrayBuffer) => client.importStep(data),
+      importStep: (data: string | ArrayBuffer) => lifecycle.run(
+        () => client.importStep(data), STEP_WORKER_OPERATION_TIMEOUT_MS, "STEP parsing"),
       tessellate: (shape: ShapeHandle, options?: TessellateOptions) =>
-        client.tessellate(shape, options),
-      release: (shape: ShapeHandle) => client.release(shape),
-      importAssembly: (data: ArrayBuffer, options: TessellateOptions) => client.importAssembly(data, options),
+        lifecycle.run(() => client.tessellate(shape, options), STEP_WORKER_OPERATION_TIMEOUT_MS, "STEP tessellation"),
+      release: (shape: ShapeHandle) => lifecycle.run(
+        () => client.release(shape), STEP_WORKER_RELEASE_TIMEOUT_MS, "STEP cleanup"),
+      importAssembly: (data: ArrayBuffer, options: TessellateOptions) => lifecycle.run(
+        () => client.importAssembly(data, options), STEP_WORKER_OPERATION_TIMEOUT_MS, "STEP assembly parsing"),
     } satisfies STEPWorkerClient;
-  });
+  }), STEP_WORKER_INIT_TIMEOUT_MS, "STEP worker initialization");
 
-  return { ready, terminate };
+  return { ready, get terminated() { return lifecycle.terminated; }, terminate: () => lifecycle.terminate() };
 }
 
 function geometryFromOcctMesh(mesh: OcctMesh): THREE.BufferGeometry {
@@ -160,6 +165,8 @@ export class STEPImporter extends BaseImporter {
     let worker: STEPWorkerClient | undefined;
     let workerTerminated = false;
     let shape: ShapeHandle | undefined;
+    let imported: ImportedModel | undefined;
+    let importFailed = false;
     const terminateWorker = (): void => {
       if (workerTerminated) return;
       workerTerminated = true;
@@ -177,7 +184,8 @@ export class STEPImporter extends BaseImporter {
       if (options.stepStructure !== "flat") {
         const bytes = await abortable(activeWorker.importAssembly(data, stepTessellationOptions(options.quality)), options.signal, terminateWorker);
         this.assertNotAborted(options);
-        return await this.importAssembly(primary, bytes, options);
+        imported = await this.importAssembly(primary, bytes, options);
+        return imported;
       }
       shape = await abortable(
         activeWorker.importStep(data),
@@ -206,7 +214,7 @@ export class STEPImporter extends BaseImporter {
       mesh.name = primary.name;
 
       const root = this.createRoot(primary, mesh);
-      return this.finishImport(
+      imported = this.finishImport(
         primary,
         "STEP",
         root,
@@ -223,15 +231,30 @@ export class STEPImporter extends BaseImporter {
           sourceUnit: "millimeter",
         },
       );
+      return imported;
+    } catch (error) {
+      importFailed = true;
+      throw error;
     } finally {
+      // Cancellation can arrive after an RPC resolves but before its awaiting
+      // continuation resumes. Do not issue a cleanup RPC with an aborted signal.
+      if (options.signal?.aborted) terminateWorker();
       if (worker) {
         try {
-          if (shape !== undefined && !workerTerminated) {
+          if (shape !== undefined && !workerTerminated && !workerHandle.terminated) {
             await abortable(
               worker.release(shape),
               options.signal,
               terminateWorker,
             );
+          }
+        } catch (error) {
+          // Do not replace the original parser failure with a cleanup failure.
+          // If cleanup fails after a successful parse, its unpublished geometry
+          // still belongs to this importer and must be disposed before rejecting.
+          if (!importFailed) {
+            if (imported) disposeLoadedObject(imported.root);
+            throw error;
           }
         } finally {
           terminateWorker();

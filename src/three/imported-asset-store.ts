@@ -167,19 +167,46 @@ export class ImportedAssetStore {
     const resources = this.#assetResources.get(assetId);
     if (!resources) return 0;
     let bytes = 0;
-    const arrays = new Set<ArrayBufferLike>();
+    const buffers = new Set<ArrayBufferLike>();
+    const gpuAttributes = new Set<THREE.BufferAttribute | THREE.InterleavedBuffer>();
+    const countCpuArray = (array: ArrayBufferView): void => {
+      if (buffers.has(array.buffer)) return;
+      buffers.add(array.buffer);
+      // A small typed view still keeps the entire backing allocation alive.
+      bytes += array.buffer.byteLength;
+    };
+    const countAttribute = (attribute: unknown, gpu = true): void => {
+      if (!(attribute instanceof THREE.BufferAttribute) && !(attribute instanceof THREE.InterleavedBufferAttribute)) return;
+      const owner = attribute instanceof THREE.InterleavedBufferAttribute ? attribute.data : attribute;
+      if (!ArrayBuffer.isView(owner.array)) return;
+      countCpuArray(owner.array);
+      // Three.js keys its WebGL buffers by attribute (or interleaved data) identity,
+      // not by the ArrayBuffer or byte range shared by its typed views.
+      if (gpu && !gpuAttributes.has(owner)) { gpuAttributes.add(owner); bytes += owner.array.byteLength; }
+    };
     for (const resource of resources) {
       if (resource instanceof THREE.BufferGeometry) {
-        const attributes = [...Object.values(resource.attributes), resource.index];
-        for (const attribute of attributes) {
-          if (!attribute) continue;
-          const array = attribute instanceof THREE.InterleavedBufferAttribute ? attribute.data.array : (attribute as THREE.BufferAttribute).array;
-          if (!ArrayBuffer.isView(array)) continue;
-          if (!arrays.has(array.buffer)) { arrays.add(array.buffer); bytes += array.byteLength * 2; }
+        for (const attribute of [...Object.values(resource.attributes), resource.index]) countAttribute(attribute);
+        for (const attributes of Object.values(resource.morphAttributes)) {
+          for (const attribute of attributes) countAttribute(attribute, false);
         }
+        const morph = resource.morphAttributes;
+        const targets = morph.position ?? morph.normal ?? morph.color;
+        const lanes = morph.color ? 3 : morph.normal ? 2 : morph.position ? 1 : 0;
+        // WebGLMorphtargets packs inputs into an additional RGBA Float32 texture.
+        // Count its CPU+GPU copies and conservatively allow up to 2x row padding
+        // because the renderer's maximum texture width is not available here.
+        bytes += (resource.attributes.position?.count ?? 0) * lanes * (targets?.length ?? 0) * 4 * 4 * 2 * 2;
+      } else if (resource instanceof THREE.InstancedMesh) {
+        countAttribute(resource.instanceMatrix); countAttribute(resource.instanceColor);
       } else if (resource instanceof THREE.Texture) {
-        const image = resource.image as { width?: number; height?: number } | undefined;
-        bytes += (image?.width ?? 0) * (image?.height ?? 0) * 4 * 8 / 3;
+        const image = resource.image as { width?: number; height?: number; data?: unknown } | undefined;
+        if (ArrayBuffer.isView(image?.data)) {
+          countCpuArray(image.data);
+          bytes += image.data.byteLength * (resource.generateMipmaps ? 4 / 3 : 1);
+        } else {
+          bytes += (image?.width ?? 0) * (image?.height ?? 0) * 4 * 8 / 3;
+        }
       }
     }
     return bytes;

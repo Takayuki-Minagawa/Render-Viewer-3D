@@ -256,20 +256,14 @@ export class MaterialLibraryView {
     }
     if (target.matches("[data-material-capability-search]")) {
       this.#capabilityQuery = target.value;
-      this.#renderedDetailKey = "";
-      this.#renderDetail();
-      this.#query<HTMLInputElement>("[data-material-capability-search]").focus();
+      this.#renderDetail(true);
       return true;
     }
     if (target.matches("[data-material-capability-support]")) {
       this.#capabilitySupport = isSupportFilter(target.value)
         ? target.value
         : "all";
-      this.#renderedDetailKey = "";
-      this.#renderDetail();
-      queueMicrotask(() =>
-        this.#query<HTMLSelectElement>("[data-material-capability-support]").focus(),
-      );
+      this.#renderDetail(true);
       return true;
     }
     return false;
@@ -393,7 +387,7 @@ export class MaterialLibraryView {
     this.#listView.render(visible, all.length, this.#selectedMaterialId, this.#locale);
   }
 
-  #renderDetail(): void {
+  #renderDetail(capabilityFiltersChanged = false): void {
     const material = this.#selectedMaterial();
     if (!material) {
       const empty = element("div", "material-detail-empty");
@@ -427,10 +421,16 @@ export class MaterialLibraryView {
       this.#syncInputs(material);
       return;
     }
-    this.#detail.replaceChildren(...this.#detailView.build(material, {
-      locale: this.#locale, editorTab: this.#editorTab, capabilityQuery: this.#capabilityQuery,
-      capabilitySupport: this.#capabilitySupport, object, usage, assigned,
-    }));
+    // Keep the search node connected while typing, including during IME
+    // composition. Restoring focus after replacement cannot retain that session.
+    if (!capabilityFiltersChanged || !this.#detailView.updateCapabilityResults(
+      this.#detail, material, this.#capabilityQuery, this.#capabilitySupport,
+    )) {
+      this.#detail.replaceChildren(...this.#detailView.build(material, {
+        locale: this.#locale, editorTab: this.#editorTab, capabilityQuery: this.#capabilityQuery,
+        capabilitySupport: this.#capabilitySupport, object, usage, assigned,
+      }));
+    }
     this.#renderedDetailKey = detailKey;
     this.#renderedColorMapAssetId = colorMapAssetId;
     syncMaterialTextureStatus(

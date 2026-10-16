@@ -121,14 +121,16 @@ test('repeated drag-drop import delete undo and history release keep resources s
 test('asynchronous edits make open modal controls inert and restore them afterwards', async ({page}) => {
   await page.goto('./');
   await page.evaluate(()=>{
-    const dialog=document.querySelector<HTMLDialogElement>('[data-material-dialog]') ?? document.querySelector<HTMLDialogElement>('dialog');
+    const dialog=document.querySelector<HTMLDialogElement>('[data-import-dialog]');
     if(!dialog) throw new Error('Missing application dialog');
     dialog.showModal();(window as any).__busyDialog=dialog;
     (window as any).__busyOperation=(window as any).__viewer.projects.editAsync(()=>new Promise(resolve=>{(window as any).__finishBusy=resolve;}));
   });
   expect(await page.evaluate(()=>{const d=(window as any).__busyDialog;return d.inert;})).toBe(true);
-  // WebKit clears the previously focused modal element on the next rendering step.
-  await expect.poll(()=>page.evaluate(()=>{const d=(window as any).__busyDialog;const input=d.querySelector('input,button');input?.focus();return d.contains(document.activeElement);})).toBe(false);
+  // WebKit clears focus on the next rendering step; software-rendered Chromium
+  // can also take longer than the default 5 seconds to complete one evaluation.
+  await expect.poll(()=>page.evaluate(()=>{const d=(window as any).__busyDialog;const input=d.querySelector('input,button');input?.focus();return d.contains(document.activeElement);}), { timeout: 15000 }).toBe(false);
   await page.evaluate(async()=>{(window as any).__finishBusy();await (window as any).__busyOperation;});
   expect(await page.evaluate(()=>(window as any).__busyDialog.inert)).toBe(false);
+  await expect.poll(()=>page.evaluate(()=>{const d=(window as any).__busyDialog;const input=d.querySelector('input,button');input?.focus();return d.contains(document.activeElement);}), { timeout: 15000 }).toBe(true);
 });

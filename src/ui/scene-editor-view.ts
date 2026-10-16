@@ -7,6 +7,7 @@ import type { MaterialDefinitionModel } from "../model/material/material-model";
 import type { GeometryModel, SceneSnapshot } from "../model/scene-model";
 import { translate, type AppLocale, type MessageKey } from "./i18n";
 import { getMaterialSupportStatus } from "./material-library";
+import { getMaterialUsageCount } from "../model/material/material-commands";
 
 export type TransformGroup = "position" | "rotationDegrees" | "scale";
 export type TransformAxis = "x" | "y" | "z";
@@ -83,6 +84,9 @@ export class SceneEditorView {
     const selectedMaterial = selectedObject
       ? model.materials.find((material) => material.id === selectedObject.materialId)
       : undefined;
+    const materialUsageCount = selectedObject
+      ? getMaterialUsageCount(model, selectedObject.materialId)
+      : 0;
 
     this.#tree.render(model, editorState, locale);
 
@@ -121,7 +125,7 @@ export class SceneEditorView {
       this.#buildInspector(
         selectedObject,
         selectedMaterial,
-        model.objects,
+        materialUsageCount,
         editorState,
         locale,
       );
@@ -135,7 +139,7 @@ export class SceneEditorView {
       this.#syncInspector(
         selectedObject,
         selectedMaterial,
-        model.objects,
+        materialUsageCount,
         editorState,
         locale,
       );
@@ -145,7 +149,7 @@ export class SceneEditorView {
   #buildInspector(
     object: ObjectModel | undefined,
     material: MaterialModel | undefined,
-    objects: SceneSnapshot["objects"],
+    materialUsageCount: number,
     editorState: EditorState,
     locale: AppLocale,
   ): void {
@@ -179,7 +183,7 @@ export class SceneEditorView {
       this.#primitiveInspector.createMaterialSection(
         object,
         material,
-        objects.filter((candidate) => candidate.materialId === object.materialId).length,
+        materialUsageCount,
         locale,
       ),
       this.#primitiveInspector.createActionSection(object, locale),
@@ -259,7 +263,7 @@ export class SceneEditorView {
   #syncInspector(
     object: ObjectModel,
     material: MaterialModel | undefined,
-    objects: SceneSnapshot["objects"],
+    materialUsageCount: number,
     editorState: EditorState,
     locale: AppLocale,
   ): void {
@@ -306,13 +310,10 @@ export class SceneEditorView {
     );
     if (meta) {
       const status = material ? getMaterialSupportStatus(material) : "stored";
-      const usageCount = objects.filter(
-        (candidate) => candidate.materialId === object.materialId,
-      ).length;
       meta.textContent = `${translate(locale, MATERIAL_STATUS_LABELS[status])} · ${translate(
         locale,
         "material.usedBy",
-      )} ${usageCount}`;
+      )} ${materialUsageCount}`;
     }
   }
 

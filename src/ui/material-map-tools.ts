@@ -4,6 +4,9 @@ import { MATERIAL_PBR_CHANNELS } from "../model/material/material-pbr-map";
 import { MATERIAL_TEXTURE_FILE_ACCEPT } from "../model/material/material-color-map";
 import type { SceneStore } from "../app/scene-store";
 import type { MaterialPbrMapController } from "../app/material-pbr-map-controller";
+import { bindCommittedNumberInput, numberInputCommitMessage, type NumberInputCommit } from "./committed-number-input";
+
+const numericFields = ["repeatX", "repeatY", "offsetX", "offsetY", "rotationDegrees"] as const;
 
 const text = {
   ja: { title: "PBR画像", material: "マテリアル", channel: "画像の種類", normal: "法線 (RGB)", roughness: "粗さ (G)", metalness: "金属度 (B)", ao: "遮蔽 (R)", attach: "画像を選択", remove: "画像を解除", none: "画像なし", busy: "読み込み中…", done: "画像を設定しました", note: "PNG/JPEG/WebP。数値データとして読み込みます。UVがない面では画像を適用しません。粗さ・金属度画像は材質の値に乗算されます。", repeatX: "反復 X", repeatY: "反復 Y", offsetX: "オフセット X", offsetY: "オフセット Y", rotationDegrees: "回転 (°)", wrapMode: "境界", repeat: "反復", "clamp-to-edge": "端で固定", "mirrored-repeat": "鏡面反復" },
@@ -12,7 +15,9 @@ const text = {
 export class MaterialMapTools {
   readonly element = document.createElement("details");
   readonly #abort = new AbortController();
+  readonly #numbers = new Map<string, { sync: () => void }>();
   readonly #unsubscribe: () => void;
+  #numberStatus: NumberInputCommit | undefined;
   #model: SceneSnapshot;
   #locale: "ja" | "en" = "ja";
   #listSignature = "";
@@ -27,12 +32,22 @@ export class MaterialMapTools {
     this.element.addEventListener("change", (event) => this.#change(event), { signal: this.#abort.signal });
     this.#get("attach").addEventListener("click", () => this.#get<HTMLInputElement>("file").click(), { signal: this.#abort.signal });
     this.#get("remove").addEventListener("click", () => controller.remove(this.#materialId(), this.#channel()), { signal: this.#abort.signal });
+    for (const field of numericFields) this.#numbers.set(field, bindCommittedNumberInput(this.#get<HTMLInputElement>(field), {
+      signal: this.#abort.signal,
+      read: () => this.#model.materials.find(({ id }) => id === this.#materialId())?.maps?.[this.#channel()]?.[field],
+      write: (value) => this.controller.update(this.#materialId(), this.#channel(), field, value),
+      onCommit: (result) => {
+        this.#numberStatus = result;
+        this.#get("status").textContent = numberInputCommitMessage(result, this.#locale);
+      },
+    }));
     this.#unsubscribe = store.subscribe((model) => { this.#model = model; this.#render(); });
     this.setLocale("ja");
   }
   setLocale(locale: "ja" | "en"): void {
     this.#locale = locale;
     this.element.querySelectorAll<HTMLElement>("[data-pbr-label]").forEach((element) => { element.textContent = text[locale][element.dataset.pbrLabel as keyof typeof text.en]; });
+    if (this.#numberStatus) this.#get("status").textContent = numberInputCommitMessage(this.#numberStatus, locale);
     this.#render();
   }
   dispose(): void { this.#abort.abort(); this.#unsubscribe(); this.element.remove(); }
@@ -54,7 +69,8 @@ export class MaterialMapTools {
     for (const field of ["repeatX", "repeatY", "offsetX", "offsetY", "rotationDegrees", "wrapMode"] as MaterialColorMapField[]) {
       const input = this.#get<HTMLInputElement | HTMLSelectElement>(field);
       input.disabled = !descriptor;
-      if (document.activeElement !== input) input.value = descriptor ? String(descriptor[field]) : field === "wrapMode" ? "repeat" : "";
+      if (field === "wrapMode") { if (document.activeElement !== input) input.value = descriptor?.wrapMode ?? "repeat"; }
+      else this.#numbers.get(field)?.sync();
     }
   }
   #change(event: Event): void {
@@ -65,10 +81,11 @@ export class MaterialMapTools {
       const file = input.files?.[0]; input.value = "";
       if (!file) return;
       const materialId = this.#materialId(), channel = this.#channel();
+      this.#numberStatus = undefined;
       this.#busy++; this.#get("status").textContent = text[this.#locale].busy; this.#render();
       void this.runAsync(() => this.controller.attach(materialId, channel, file)).then(() => { this.#get("status").textContent = text[this.#locale].done; }).catch((error) => { this.#get("status").textContent = error instanceof Error ? error.message : String(error); }).finally(() => { this.#busy--; this.#render(); });
       return;
     }
-    if (["repeatX", "repeatY", "offsetX", "offsetY", "rotationDegrees", "wrapMode"].includes(key ?? "")) this.controller.update(this.#materialId(), this.#channel(), key as MaterialColorMapField, key === "wrapMode" ? input.value : Number(input.value));
+    if (key === "wrapMode") this.controller.update(this.#materialId(), this.#channel(), key, input.value);
   }
 }

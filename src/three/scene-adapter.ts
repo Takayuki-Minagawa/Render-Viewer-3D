@@ -6,6 +6,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { TransformMode } from "../app/editor-store";
 import type { CameraModel, DeepReadonly, SceneSnapshot, TransformModel, Vec3Model } from "../model/scene-model";
 import { calculateCameraFit } from "./camera-fit";
+import { includeCameraDistance } from "./camera-constraints";
 import { visibleBounds } from "./visible-bounds";
 import { ImportedAssetStore } from "./imported-asset-store";
 import type { MaterialImageAssetStore } from "./material/image-asset-store";
@@ -309,7 +310,8 @@ export class SceneAdapter {
     this.#projectionCameras.set(projection, this.#camera); this.#camera.zoom = 1;
     this.#camera.position.copy(old.position); this.#camera.quaternion.copy(old.quaternion); this.#camera.up.copy(old.up);
     this.#camera.near = old.near; this.#camera.far = old.far;
-    this.#controls.object = this.#camera; this.#interaction.setCamera(this.#camera); this.#updateProjection(); this.#controls.update();
+    this.#controls.object = this.#camera; this.#interaction.setCamera(this.#camera); this.#updateProjection();
+    includeCameraDistance(this.#controls, this.#camera.position.distanceTo(this.#controls.target)); this.#controls.update();
     this.#tools?.setProjection(projection); this.requestRender();
   }
   #applyCamera(model: DeepReadonly<CameraModel>): void {
@@ -321,7 +323,9 @@ export class SceneAdapter {
     }
     this.#camera.near = model.near; this.#camera.far = model.far; this.#camera.zoom = 1;
     this.#camera.position.set(model.position.x, model.position.y, model.position.z);
-    this.#controls.target.set(model.target.x, model.target.y, model.target.z); this.#updateProjection(); this.#controls.update();
+    this.#controls.target.set(model.target.x, model.target.y, model.target.z);
+    includeCameraDistance(this.#controls, this.#camera.position.distanceTo(this.#controls.target));
+    this.#updateProjection(); this.#controls.update();
   }
   #replaceControlsForUp(): void {
     const old = this.#controls;

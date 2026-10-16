@@ -1,4 +1,4 @@
-import type { SceneModel } from "../scene-model";
+import type { SceneModel, SceneSnapshot } from "../scene-model";
 import { cloneModelValue } from "../immutable";
 import type {
   MaterialDefinitionModel,
@@ -215,7 +215,7 @@ export function updateMaterialPovScalar(
 }
 
 export function getMaterialUsageCount(
-  scene: Pick<SceneModel, "objects" | "imports">,
+  scene: Pick<SceneSnapshot, "objects" | "imports">,
   materialId: string,
 ): number {
   const objectUsage = scene.objects.reduce(

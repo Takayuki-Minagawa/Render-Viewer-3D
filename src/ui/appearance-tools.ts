@@ -1,5 +1,6 @@
 import type { SceneStore } from "../app/scene-store";
 import type { SceneSnapshot } from "../model/scene-model";
+import { bindCommittedNumberInput, numberInputCommitMessage, type NumberInputCommit } from "./committed-number-input";
 
 interface AppearanceOptions { onEnvironmentFile: (file: File | null) => Promise<void>; }
 const messages = {
@@ -8,7 +9,10 @@ const messages = {
 };
 export class AppearanceTools {
   readonly element = document.createElement("details");
+  readonly #abort = new AbortController();
+  readonly #numbers = new Map<string, { sync: () => void }>();
   readonly #unsubscribe: () => void;
+  #numberStatus: NumberInputCommit | undefined;
   #locale: "ja" | "en" = "ja";
   #selectedLight = "";
   #lightSignature = "";
@@ -27,29 +31,46 @@ export class AppearanceTools {
       <label><span data-at-label="hdr"></span><input data-at="hdr" type="file" accept=".hdr" style="width:140px"></label><small data-at-label="limits"></small><output data-at="environment"></output><button data-at="reset" data-at-label="reset"></button><output data-at="status" role="status"></output></div>`;
     container.append(this.element); this.setLocale("ja");
     this.#get("light").addEventListener("change", () => { this.#selectedLight = this.#get<HTMLSelectElement>("light").value; this.#render(this.store.getSnapshot()); });
-    for (const field of ["enabled", "color", "intensity", "position-x", "position-y", "position-z", "target-x", "target-y", "target-z"]) {
+    for (const field of ["enabled", "color"]) {
       this.#get(field).addEventListener("change", () => {
         const input = this.#get<HTMLInputElement>(field);
-        if (field !== "enabled" && field !== "color" && !Number.isFinite(Number(input.value))) return;
         this.store.update((draft) => {
           const light = draft.lights.find(({ id }) => id === this.#selectedLight); if (!light) return;
           if (field === "enabled") light.enabled = input.checked;
-          else if (field === "color") light.color = input.value;
-          else if (field === "intensity") light.intensity = Math.max(0, Math.min(100, Number(input.value)));
-          else if (light.type === "directional") {
-            const [kind, axis] = field.split("-") as ["position" | "target", "x" | "y" | "z"];
-            light[kind][axis] = Math.max(-1e6, Math.min(1e6, Number(input.value)));
-          }
+          else light.color = input.value;
         });
       });
     }
-    this.#get("exposure").addEventListener("change", () => { const value = Number(this.#get<HTMLInputElement>("exposure").value); if (Number.isFinite(value)) this.store.update((draft) => { draft.exposure = Math.max(0, Math.min(10, value)); }); });
+    const onCommit = (result: NumberInputCommit) => {
+      this.#numberStatus = result;
+      this.#get("status").textContent = numberInputCommitMessage(result, this.#locale);
+    };
+    for (const field of ["intensity", "position-x", "position-y", "position-z", "target-x", "target-y", "target-z"]) {
+      const [kind, axis] = field.split("-") as ["position" | "target", "x" | "y" | "z"];
+      this.#numbers.set(field, bindCommittedNumberInput(this.#get<HTMLInputElement>(field), {
+        signal: this.#abort.signal, onCommit,
+        read: () => {
+          const light = this.store.getSnapshot().lights.find(({ id }) => id === this.#selectedLight);
+          return field === "intensity" ? light?.intensity : light?.type === "directional" ? light[kind][axis] : undefined;
+        },
+        write: (value) => this.store.update((draft) => {
+          const light = draft.lights.find(({ id }) => id === this.#selectedLight); if (!light) return;
+          if (field === "intensity") light.intensity = Math.max(0, Math.min(100, value));
+          else if (light.type === "directional") light[kind][axis] = Math.max(-1e6, Math.min(1e6, value));
+        }),
+      }));
+    }
+    this.#numbers.set("exposure", bindCommittedNumberInput(this.#get<HTMLInputElement>("exposure"), {
+      signal: this.#abort.signal, onCommit,
+      read: () => this.store.getSnapshot().exposure ?? 1.05,
+      write: (value) => this.store.update((draft) => { draft.exposure = Math.max(0, Math.min(10, value)); }),
+    }));
     this.#get("hdr").addEventListener("change", () => { const input = this.#get<HTMLInputElement>("hdr"); const file = input.files?.[0]; input.value = ""; if (file) void this.#load(file); });
     this.#get("reset").addEventListener("click", () => void this.#load(null));
     this.#unsubscribe = store.subscribe((model) => this.#render(model));
   }
-  setLocale(locale: "ja" | "en"): void { this.#locale = locale; const t = messages[locale]; this.element.querySelectorAll<HTMLElement>("[data-at-label]").forEach((node) => { node.textContent = t[node.dataset.atLabel as keyof typeof t]; }); }
-  dispose(): void { this.#unsubscribe(); this.element.remove(); }
+  setLocale(locale: "ja" | "en"): void { this.#locale = locale; const t = messages[locale]; this.element.querySelectorAll<HTMLElement>("[data-at-label]").forEach((node) => { node.textContent = t[node.dataset.atLabel as keyof typeof t]; }); if (this.#numberStatus) this.#get("status").textContent = numberInputCommitMessage(this.#numberStatus, locale); }
+  dispose(): void { this.#abort.abort(); this.#unsubscribe(); this.element.remove(); }
   #get<T extends HTMLElement = HTMLElement>(id: string): T { return this.element.querySelector<T>(`[data-at="${id}"]`)!; }
   #render(model: SceneSnapshot): void {
     const signature = JSON.stringify(model.lights.map(({ id, name }) => [id, name]));
@@ -60,17 +81,17 @@ export class AppearanceTools {
       select.value = this.#selectedLight;
     }
     const setValue = (id: string, value: string | number) => { const input = this.#get<HTMLInputElement>(id); if (document.activeElement !== input) input.value = String(value); };
-    setValue("exposure", model.exposure ?? 1.05);
+    for (const number of this.#numbers.values()) number.sync();
     this.#get("environment").textContent = model.environment?.name ?? "";
     const light = model.lights.find(({ id }) => id === this.#selectedLight);
     for (const id of ["enabled", "color", "intensity"]) this.#get<HTMLInputElement>(id).disabled = !light;
     this.#get("vectors").hidden = light?.type !== "directional";
     if (!light) return;
-    this.#get<HTMLInputElement>("enabled").checked = light.enabled; setValue("color", light.color); setValue("intensity", light.intensity);
-    if (light.type === "directional") for (const kind of ["position", "target"] as const) for (const axis of ["x", "y", "z"] as const) setValue(`${kind}-${axis}`, light[kind][axis]);
+    this.#get<HTMLInputElement>("enabled").checked = light.enabled; setValue("color", light.color);
   }
   async #load(file: File | null): Promise<void> {
     if (this.#busy) return; this.#busy = true;
+    this.#numberStatus = undefined;
     this.#get<HTMLInputElement>("hdr").disabled = true; this.#get<HTMLButtonElement>("reset").disabled = true;
     this.#get("status").textContent = messages[this.#locale].loading;
     try { await this.options.onEnvironmentFile(file); this.#get("status").textContent = messages[this.#locale].loaded; }

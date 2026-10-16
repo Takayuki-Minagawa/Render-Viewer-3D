@@ -7,6 +7,9 @@ let server;
 let STEPImporter;
 let stepTessellationOptions;
 let MAX_STEP_INPUT_BYTES;
+let STEP_WORKER_INIT_TIMEOUT_MS;
+let STEP_WORKER_OPERATION_TIMEOUT_MS;
+let STEP_WORKER_RELEASE_TIMEOUT_MS;
 let DEFAULT_IMPORT_OPTIONS;
 
 before(async () => {
@@ -19,6 +22,9 @@ before(async () => {
     STEPImporter,
     stepTessellationOptions,
     MAX_STEP_INPUT_BYTES,
+    STEP_WORKER_INIT_TIMEOUT_MS,
+    STEP_WORKER_OPERATION_TIMEOUT_MS,
+    STEP_WORKER_RELEASE_TIMEOUT_MS,
   } = await server.ssrLoadModule("/src/importers/STEPImporter.ts"));
   ({ DEFAULT_IMPORT_OPTIONS } = await server.ssrLoadModule(
     "/src/importers/types.ts",
@@ -90,6 +96,18 @@ function findMesh(root) {
   });
   assert.ok(mesh);
   return mesh;
+}
+
+class TrackedWorker extends EventTarget {
+  listeners = new Set();
+  addEventListener(type, listener, options) {
+    this.listeners.add(type);
+    super.addEventListener(type, listener, options);
+  }
+  removeEventListener(type, listener, options) {
+    this.listeners.delete(type);
+    super.removeEventListener(type, listener, options);
+  }
 }
 
 describe("STEPImporter", () => {
@@ -392,4 +410,165 @@ describe("STEPImporter", () => {
     await assert.rejects(importing, (error) => error === reason);
     assert.deepEqual(calls, ["importStep", "tessellate", "terminate"]);
   });
+
+  it("keeps the original parser error when cleanup also fails", async () => {
+    const failure = new Error("tessellation failed first");
+    const calls = [];
+    const worker = {
+      async importStep() { return 1; },
+      async tessellate() { throw failure; },
+      async release() { calls.push("release"); throw new Error("cleanup failed later"); },
+      terminate() { calls.push("terminate"); },
+    };
+    const importer = new STEPImporter(createWorkerFactory(worker));
+    const primary = primaryFile();
+    await assert.rejects(importer.import(primary, [primary], options()), error => error === failure);
+    assert.deepEqual(calls, ["release", "terminate"]);
+  });
+
+  it("disposes the unpublished model if cleanup fails after tessellation succeeds", async () => {
+    const failure = new Error("cleanup failed");
+    const worker = {
+      async importStep() { return 1; },
+      async tessellate() { return fixtureMesh(); },
+      async release() { throw failure; },
+      terminate() {},
+    };
+    const importer = new STEPImporter(createWorkerFactory(worker));
+    let disposedGeometry = 0, disposedMaterial = 0;
+    const finishImport = importer.finishImport;
+    importer.finishImport = function (...args) {
+      const model = finishImport.apply(this, args);
+      const mesh = findMesh(model.root);
+      mesh.geometry.addEventListener("dispose", () => disposedGeometry++);
+      mesh.material.addEventListener("dispose", () => disposedMaterial++);
+      return model;
+    };
+    const primary = primaryFile();
+    await assert.rejects(importer.import(primary, [primary], options()), error => error === failure);
+    assert.equal(disposedGeometry, 1);
+    assert.equal(disposedMaterial, 1);
+  });
+
+  for (const phase of ["init", "importStep", "tessellate", "importAssembly", "release"]) {
+    for (const eventType of ["error", "messageerror"]) {
+      it(`rejects native ${eventType} during ${phase} through the real Comlink client`, { timeout: 3000 }, async () => {
+        const previous = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+        const instances = [];
+        class MockWorker extends TrackedWorker {
+          calls = [];
+          terminateCalls = 0;
+          constructor() { super(); instances.push(this); }
+          postMessage(message) {
+            const operation = message.path?.[0];
+            this.calls.push(operation);
+            queueMicrotask(() => {
+              if (operation === phase) {
+                this.dispatchEvent(new Event(eventType));
+                return;
+              }
+              const value = operation === "importStep" ? 1 : operation === "tessellate" ? fixtureMesh() : undefined;
+              this.dispatchEvent(new MessageEvent("message", { data: { id: message.id, type: "RAW", value } }));
+            });
+          }
+          terminate() { this.terminateCalls += 1; }
+        }
+        Object.defineProperty(globalThis, "Worker", { configurable: true, writable: true, value: MockWorker });
+        try {
+          const importer = new STEPImporter();
+          const primary = primaryFile();
+          await assert.rejects(importer.import(primary, [primary], options({ stepStructure: phase === "importAssembly" ? "assembly" : "flat" })),
+            eventType === "error" ? /STEP worker failed/ : /STEP worker response/);
+          assert.equal(instances.length, 1);
+          assert.equal(instances[0].terminateCalls, 1);
+          assert.equal(instances[0].calls.at(-1), phase);
+          assert.equal(instances[0].listeners.size, 0);
+        } finally {
+          if (previous) Object.defineProperty(globalThis, "Worker", previous);
+          else delete globalThis.Worker;
+        }
+      });
+    }
+  }
+
+  for (const phase of ["init", "importStep", "tessellate", "importAssembly", "release"]) {
+    it(`bounds an unanswered ${phase} RPC using its configured deadline`, { timeout: 3000 }, async t => {
+      const previous = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+      const started = deferred();
+      const instances = [];
+      class MockWorker extends TrackedWorker {
+        calls = [];
+        terminateCalls = 0;
+        constructor() { super(); instances.push(this); }
+        postMessage(message) {
+          const operation = message.path?.[0];
+          this.calls.push(operation);
+          if (operation === phase) { started.resolve(); return; }
+          const value = operation === "importStep" ? 1 : operation === "tessellate" ? fixtureMesh() : undefined;
+          queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: { id: message.id, type: "RAW", value } })));
+        }
+        terminate() { this.terminateCalls++; }
+      }
+      Object.defineProperty(globalThis, "Worker", { configurable: true, writable: true, value: MockWorker });
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      try {
+        const primary = primaryFile();
+        const pending = new STEPImporter().import(primary, [primary], options({ stepStructure: phase === "importAssembly" ? "assembly" : "flat" }));
+        const rejected = assert.rejects(pending, { name: "TimeoutError" });
+        await started.promise;
+        const deadline = phase === "init" ? STEP_WORKER_INIT_TIMEOUT_MS : phase === "release" ? STEP_WORKER_RELEASE_TIMEOUT_MS : STEP_WORKER_OPERATION_TIMEOUT_MS;
+        t.mock.timers.tick(deadline - 1);
+        assert.equal(instances[0].terminateCalls, 0);
+        t.mock.timers.tick(1);
+        await rejected;
+        assert.equal(instances[0].terminateCalls, 1);
+        assert.equal(instances[0].calls.at(-1), phase);
+        assert.equal(instances[0].listeners.size, 0);
+      } finally {
+        if (previous) Object.defineProperty(globalThis, "Worker", previous);
+        else delete globalThis.Worker;
+      }
+    });
+  }
+
+  for (const cancelled of [false, true]) {
+    it(`removes all native Worker listeners after ${cancelled ? "cancellation" : "successful import"}`, async () => {
+      const previous = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+      const started = deferred();
+      const instances = [];
+      class MockWorker extends TrackedWorker {
+        terminateCalls = 0;
+        constructor() { super(); instances.push(this); }
+        postMessage(message) {
+          const operation = message.path?.[0];
+          if (operation === "importStep" && cancelled) { started.resolve(); return; }
+          const value = operation === "importStep" ? 1 : operation === "tessellate" ? fixtureMesh() : undefined;
+          queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: { id: message.id, type: "RAW", value } })));
+        }
+        terminate() { this.terminateCalls++; }
+      }
+      Object.defineProperty(globalThis, "Worker", { configurable: true, writable: true, value: MockWorker });
+      try {
+        const controller = new AbortController();
+        const primary = primaryFile();
+        const pending = new STEPImporter().import(primary, [primary], options({ signal: controller.signal }));
+        if (cancelled) {
+          const reason = new Error("user supplied cancellation reason");
+          const rejected = assert.rejects(pending, error => error === reason);
+          await started.promise;
+          controller.abort(reason);
+          await rejected;
+        } else {
+          const model = await pending;
+          const mesh = findMesh(model.root);
+          mesh.geometry.dispose(); mesh.material.dispose();
+        }
+        assert.equal(instances[0].terminateCalls, 1);
+        assert.equal(instances[0].listeners.size, 0);
+      } finally {
+        if (previous) Object.defineProperty(globalThis, "Worker", previous);
+        else delete globalThis.Worker;
+      }
+    });
+  }
 });

@@ -7,6 +7,7 @@ type ImportNotice =
   | { kind: "idle" }
   | { kind: "busy"; fileNames: string }
   | { kind: "success"; fileNames: string }
+  | { kind: "cancelled"; fileNames: string }
   | { kind: "error"; detail: string };
 
 export type ImportActionResult =
@@ -157,11 +158,12 @@ export class ImportDialogController {
       if (result.kind === "success") {
         this.#importNotice = { kind: "success", fileNames };
       } else if (result.kind === "error") {
-        console.error("Model import failed.", result.error);
-        this.#importNotice = {
-          kind: "error",
-          detail: importErrorDetail(result.error),
-        };
+        if (result.error instanceof Error && result.error.name === "AbortError") {
+          this.#importNotice = { kind: "cancelled", fileNames };
+        } else {
+          console.error("Model import failed.", result.error);
+          this.#importNotice = { kind: "error", detail: importErrorDetail(result.error) };
+        }
       }
     } finally {
       this.#importBusy = false;

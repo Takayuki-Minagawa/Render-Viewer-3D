@@ -66,7 +66,6 @@ export function createApplication(root: HTMLElement): Application {
   const projectAssets = new ProjectAssets();
   const history = new SceneHistory(store, importedAssets, materialImages, projectAssets);
   const importManager = new ImportManager();
-  const importAbortController = new AbortController();
   const shell = new AppShell(root);
   let nodeTools: ImportedNodeTools | undefined;
 
@@ -220,10 +219,10 @@ export function createApplication(root: HTMLElement): Application {
       },
       importFiles: async (files, options) => {
         const started = performance.now();
-        await projects.editAsync(() => importController.importFiles(files, {
+        await projects.editAsync(signal => importController.importFiles(files, {
           ...options,
-          signal: importAbortController.signal,
-        }));
+          signal,
+        }), { cancellable: true, label: files[0]?.name ?? "" });
         adapter.setImportDuration(performance.now() - started);
       },
       attachMaterialColorMap: async (materialId, file) => {
@@ -396,7 +395,6 @@ export function createApplication(root: HTMLElement): Application {
         localeObserver.disconnect();
         projects.dispose();
         history.dispose();
-        importAbortController.abort();
         materialTextures.dispose();
         unsubscribeEditor();
         unsubscribeScene();

@@ -165,13 +165,36 @@ export class MaterialDetailView {
     supportLabel.append(support);
     filters.append(searchLabel, supportLabel);
 
+    const groups = element("div", "material-capability-groups");
+    groups.append(...this.#capabilityResults(material, this.#capabilityQuery, this.#capabilitySupport));
+    editor.append(intro, filters, groups);
+    return editor;
+  }
+
+  updateCapabilityResults(
+    root: HTMLElement,
+    material: MaterialSnapshot,
+    query: string,
+    support: "all" | MaterialSupportStatus,
+  ): boolean {
+    const groups = root.querySelector<HTMLElement>(".material-capability-groups");
+    if (!groups) return false;
+    groups.replaceChildren(...this.#capabilityResults(material, query, support));
+    return true;
+  }
+
+  #capabilityResults(
+    material: MaterialSnapshot,
+    query: string,
+    support: "all" | MaterialSupportStatus,
+  ): HTMLElement[] {
     const visible = filterCapabilities(
       MATERIAL_CAPABILITIES,
-      this.#capabilityQuery,
-      this.#capabilitySupport,
+      query,
+      support,
       this.#locale,
     );
-    const groups = element("div", "material-capability-groups");
+    const groups: HTMLElement[] = [];
     for (const category of capabilityCategories()) {
       const entries = visible.filter((entry) => entry.category === category);
       if (!entries.length) continue;
@@ -185,15 +208,14 @@ export class MaterialDetailView {
       const list = element("div", "material-capability-list");
       list.append(...entries.map((entry) => this.#capabilityRow(material, entry)));
       details.append(summary, list);
-      groups.append(details);
+      groups.push(details);
     }
     if (!visible.length) {
       const empty = textElement("p", translate(this.#locale, "material.noResultsBody"));
       empty.className = "material-capability-empty";
-      groups.append(empty);
+      groups.push(empty);
     }
-    editor.append(intro, filters, groups);
-    return editor;
+    return groups;
   }
 
   #capabilityRow(
